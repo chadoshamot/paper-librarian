@@ -1,0 +1,61 @@
+# taxonomy.yml — 分类学（版本化，随知识库上云；改文件即改规则，无需改代码）
+
+version: 1
+
+# 类别：封闭集合
+category:
+  values: [综述, 方法, 理论, 工具, 数据集, 应用, 评测]
+  mode: closed
+  allow_multi: true
+  default: 方法
+
+# 大领域：两级（顶层学科 → 具体方向），受控词表，开放可扩展
+broad_field:
+  mode: curated
+  groups:
+    # ── 当前活跃分支（机器学习系统）──
+    机器学习系统:
+      - 推理服务
+      - 训练系统
+      - GPU共享与虚拟化
+      - 调度
+      - 抢占与弹性
+      - 集群资源管理
+    # ── 预留：AI 其余方向（以后用到时 agent 自动可选）──
+    大语言模型: [预训练, 微调, 推理加速, 投机解码, Agent]
+    自然语言处理: [文本生成, 问答, 信息抽取]
+    计算机视觉: [图像生成, 检测, 分割]
+    语音与音频: [语音识别, 语音合成]
+    多模态: [图文理解, 视频理解]
+    强化学习: [离线RL, 在线RL]
+    图与结构化数据: [图神经网络, 时序]
+    安全与对齐: [安全, 可解释性, 幻觉]
+    评测与基准: [基准, 评估方法]
+  default: 未分类
+
+# 主要工作：开放词表 + 别名归一化
+work_slug:
+  mode: open
+  granularity_rule: "同 slug = 同子问题/同类方法，值得并排比较"
+  slug_style: {case: lower, separator: "-", language: en}
+  allow_multi: true
+  new_slug_flow: propose_then_review
+  entries:
+    # 从你现有论文里预置的常用 slug
+    co-location:          {aliases: [colocation, 共置, 在线离线共存]}
+    gpu-sharing:          {aliases: [gpu_share, GPU共享, 空间共享]}
+    preemption:           {aliases: [抢占, preempt]}
+    suspend-resume:       {aliases: [suspend_resume, 挂起恢复]}
+    traffic-shaping:      {aliases: [流量整形, traffic_shaping]}
+    load-forecasting:     {aliases: [负载预测, 波谷预测, load_forecast]}
+    slo-aware-scheduling: {aliases: [slo, SLO感知调度, 服务质量调度]}
+    job-packing:          {aliases: [任务打包, packing]}
+    memory-handover:      {aliases: [内存移交, handover]}
+    dynamic-scaling:      {aliases: [弹性伸缩, scaling]}
+    checkpoint-migration: {aliases: [检查点迁移, 迁移]}
+    # …… 随使用增长，人审后固化
+
+# 年份：从元数据取
+year:
+  source: metadata
+  fallback: current_year
