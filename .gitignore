@@ -1,0 +1,27 @@
+# ── 密钥（绝不上云，由 setup.py 交互式生成）──
+.env
+
+# ── 数据 / 缓存（clone 后由 setup.py 生成或导入，不入库）──
+# PDF 热缓存（ModelScope 云仓库的本地副本）
+cache/
+# 双语知识库（含 config.yml / taxonomy.yml 的运行副本）
+knowledge-base/
+# 新 PDF 收件箱（inbox）
+papers/
+# 嵌入模型缓存（首次检索自动下载）
+models/
+# 检索向量索引（自动生成）
+index/
+# 每日检索日报
+reports/
+
+# ── Python ──
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ── 系统 ──
+.DS_Store
+Thumbs.db
+*.log

@@ -1,0 +1,15 @@
+# ── 基础 ──────────────────────────────────────────
+pyzotero>=1.5.6            # Zotero Web API
+openai>=1.40.0             # DeepSeek/Qwen/GLM 等 OpenAI 兼容 LLM 接口
+python-dotenv>=1.0.0       # 读取 .env
+PyYAML>=6.0                # 解析 config.yml / taxonomy.yml
+requests>=2.31             # HTTP
+modelscope>=1.14.0         # ModelScope CLI / SDK（push 用）
+
+# ── 检索（P1，fastembed + jina-v2-base-zh，768 维，双语）──
+fastembed>=0.8.0           # 语义向量（jinaai/jina-embeddings-v2-base-zh）
+numpy>=1.26
+onnxruntime>=1.30          # fastembed 的推理后端（无需 torch）
+
+# ── 每日检索（P3）────────────────────────────────
+feedparser>=6.0            # 解析 arXiv API 返回的 Atom feed

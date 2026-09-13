@@ -1,0 +1,123 @@
+# config.yml — 全局参数（多接口共读，版本化随知识库上云）
+# 这是模板：`python setup.py` 会把 __NAMESPACE__ 替换成你的 ModelScope 用户名后，
+# 写成 knowledge-base/config.yml。改任何参数后无需改代码，服务重读此文件即生效。
+
+# ── 存储 ──────────────────────────────────────────
+storage:
+  cloud:
+    provider: modelscope
+    namespace: __NAMESPACE__                # setup.py 会替换成你的 ModelScope 用户名
+    pdf_repo: __NAMESPACE__/paper-library-pdfs   # PDF 全量（数据集 repo，git-lfs）
+    kb_repo: __NAMESPACE__/paper-knowledge-base  # 知识库（Markdown repo）
+  local:
+    cache_dir: ./cache/                     # 本地热缓存，Zotero 链接文件指向这里
+    cache_max_gb: 5                         # 磁盘不够 → 调小或 0
+    index_dir: ./index/                     # 检索索引（SQLite + 向量）
+    inbox_dir: ./papers/                    # 新 PDF 丢这里，等待入库
+
+# ── Zotero ────────────────────────────────────────
+zotero:
+  user_id: ${ZOTERO_USER_ID}                # 从 .env 读取
+  api_key: ${ZOTERO_API_KEY}                # 从 .env 读取
+  library_type: user
+  attachment_mode: linked                   # 链接文件 → 指向 cache/
+
+# ── 模型（可插拔接口）────────────────────────────
+#   改 key   → 只改 .env
+#   改模型名 → 改 default / tasks
+#   换 provider（OpenAI 兼容类）→ 改 provider / base_url / api_key_env 三处即可
+model:
+  provider: deepseek                        # deepseek / qwen / openai / glm / ollama
+  api_key_env: DEEPSEEK_API_KEY             # 指向 .env 里的变量名
+  base_url: https://api.deepseek.com        # OpenAI 兼容端点
+  default: deepseek-chat                    # 默认模型名
+  tasks:                                    # 每任务可单独指定模型（留空则用 default）
+    classify:  deepseek-chat
+    summarize: deepseek-chat
+    judge:     deepseek-chat
+    # 以后想给摘要用更强的模型，例如：summarize: deepseek-reasoner
+
+# ── 联网对话（每日简报里嵌的 LLM 聊天，独立于上面的 model）──
+chat:
+  provider: kimi                             # Moonshot Kimi，官方工具 web-search（Formula API）全网检索
+  api_key_env: MOONSHOT_API_KEY              # 指向 .env 里的变量名
+  base_url: https://api.moonshot.cn/v1
+  model: kimi-k3                             # 现役模型：kimi-k3 / kimi-k2.6 / kimi-k2.7-code
+
+# ── 命名模板 ──────────────────────────────────────
+naming:
+  template: "{category}_{area}_{work}_{year}"
+  join: "_"
+  multi_value_join: "+"
+  area_lang: zh                             # 大领域用中文
+  work_lang: en                             # 主要工作用英文 slug
+
+# ── 一键分类（目录结构）──────────────────────────
+classification:
+  default: by_area
+  templates:
+    by_area:     "{area}/{work}/{filename}"
+    by_category: "{category}/{area}/{filename}"
+    by_year:     "{year}/{area}/{filename}"
+    flat:        "{filename}"
+
+# ── 检索（P1 已启用）──────────────────────────────
+retrieval:
+  top_k: 10
+  embedding: {model: jinaai/jina-embeddings-v2-base-zh, dim: 768, lang: [zh, en]}
+  hybrid: {dense: 1.0, title_boost: 0.15}   # 标题关键词命中加分（rerank 轻量替代）
+  min_sim: 0.30                             # top-1 语义相似度低于此判为「无相关结果」
+  explore: {diversity: mmr, lambda: 0.7}
+
+# ── 质量评分（每日检索用）────────────────────────
+quality:
+  weights: {venue: 0.25, relevance: 0.35, citation: 0.15, recency: 0.05, novelty: 0.05, llm_judge: 0.15}
+  venue_rank:
+    # T0：ML/系统顶会顶刊（含你领域 OSDI/SOSP/NSDI/ASPLOS/ATC/MLSys 等）
+    T0: [NeurIPS, ICML, ICLR, ACL, EMNLP, CVPR, ICCV, ECCV, AAAI, IJCAI, KDD, SIGIR,
+         OSDI, SOSP, NSDI, ASPLOS, EuroSys, USENIX ATC, MLSys, JMLR, TPAMI, TACL]
+    T1: [VLDB, SIGMOD, ICDE, SC, HPDC, ICS, TPDS, TACO]
+    T2: []
+    T3: [arXiv]
+  citation_source: openalex
+  age_normalization: citations_per_year
+
+# ── 每日检索（P3 启用）────────────────────────────
+daily:
+  schedule: "0 8 * * *"                    # 每天 08:00（由系统计划任务触发 python -m service.daily）
+  top_k: 10
+  sources: [arxiv, openalex, semantic_scholar]
+  dedup: {by: [id, doi, title_fuzzy]}
+  recent_days: 180                          # 只看近 180 天发表（新鲜度窗口）
+  per_query: 6                              # 每个 query × 每个 source 抓取条数上限
+  min_relevance: 0.35                        # 与本库语义质心相似度低于此 → 判为无关，丢弃
+  # 检索兴趣点（英文查询，可自行增删；代表你的研究关注）
+  queries:
+    - "GPU cluster scheduling"
+    - "SLO-aware inference serving"
+    - "GPU sharing and virtualization"
+    - "preemptive scheduling datacenter"
+    - "co-located workloads resource management"
+    - "dynamic scaling machine learning serving"
+
+# ── 跳转原文 ──────────────────────────────────────
+open_original:
+  order: [local, arxiv, doi, cloud, zotero]
+
+# ── 邮箱推送（每日简报发邮箱，QQ 邮箱）─────────────────
+# 注意：emailer.py 直接从 .env 读 SMTP_* 环境变量，下面仅作参考文档。
+#   SMTP_HOST=smtp.qq.com     SMTP_PORT=465（SSL）
+#   SMTP_USER=你的 QQ 邮箱     SMTP_PASS=QQ 授权码（非登录密码）
+#   SMTP_TO=收件人邮箱
+email:
+  host: smtp.qq.com
+  port: 465
+  use_ssl: true
+  user_env: SMTP_USER
+  pass_env: SMTP_PASS
+  to_env: SMTP_TO
+
+# ── 语言 ──────────────────────────────────────────
+language:
+  kb: bilingual
+  summary_fields: [zh, en]
