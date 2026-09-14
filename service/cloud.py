@@ -34,8 +34,8 @@ def _sync_repo(repo_dir, namespace, repo, token, message):
     if not (repo_dir / ".git").exists():
         print(f"[cloud] {repo} 尚未初始化 git，跳过")
         return False
-    _git(repo_dir, "config", "user.name", "you")
-    _git(repo_dir, "config", "user.email", "you@example.com")
+    _git(repo_dir, "config", "user.name", os.environ.get("GIT_USER_NAME", "you"))
+    _git(repo_dir, "config", "user.email", os.environ.get("GIT_USER_EMAIL", "you@example.com"))
     _ensure_remote(repo_dir, namespace, repo, token)
     _git(repo_dir, "add", "-A")
     if not _git(repo_dir, "status", "--porcelain").stdout.strip():
