@@ -41,5 +41,14 @@ class ZoteroClient:
         except Exception as e:
             print(f"  [warn] 删除条目失败: {e}")
 
+    def update_title(self, item_key: str, title: str):
+        """更新条目标题（失败不抛异常）。"""
+        try:
+            item = self.zot.item(item_key)
+            item["data"]["title"] = title
+            self.zot.update_item(item)
+        except Exception as e:
+            print(f"  [warn] 更新 Zotero 标题失败: {e}")
+
     def num_items(self):
         return self.zot.num_items()
