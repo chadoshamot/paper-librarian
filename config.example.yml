@@ -35,6 +35,7 @@ model:
     classify:  deepseek-chat
     summarize: deepseek-chat
     judge:     deepseek-chat
+    librarian: deepseek-chat                # 馆长 agent（知识库问答）
     # 以后想给摘要用更强的模型，例如：summarize: deepseek-reasoner
 
 # ── 联网对话（每日简报里嵌的 LLM 聊天，独立于上面的 model）──

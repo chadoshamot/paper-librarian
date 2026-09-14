@@ -13,3 +13,6 @@ onnxruntime>=1.30          # fastembed 的推理后端（无需 torch）
 
 # ── 每日检索（P3）────────────────────────────────
 feedparser>=6.0            # 解析 arXiv API 返回的 Atom feed
+
+# ── 馆长 agent（深读：PDF 全文抽取）──
+pypdf>=4.0                 # 纯 Python，无编译依赖
