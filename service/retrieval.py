@@ -14,6 +14,8 @@ from urllib.parse import quote
 import numpy as np
 import yaml
 
+from .read_state import read_set
+
 _EMBED_MODEL = None
 _EMBED_NAME = "jinaai/jina-embeddings-v2-base-zh"
 MIN_SIM = 0.30  # 语义相似度阈值：top-1 低于此判为「无相关结果」
@@ -30,6 +32,7 @@ def load_documents(config) -> list[dict]:
     """从 knowledge-base/fields/**/*.md 解析出检索文档（始终读源文件，无陈旧）。"""
     fields_dir = config.root / "knowledge-base" / "fields"
     docs = []
+    rs = read_set(config)
     for md in sorted(fields_dir.rglob("*.md")):
         parts = md.read_text(encoding="utf-8").split("---", 2)
         if len(parts) < 3:
@@ -53,6 +56,7 @@ def load_documents(config) -> list[dict]:
             "arxiv_id": fm.get("arxiv_id") or "",
             "zotero_key": fm.get("zotero_key", ""),
             "pdf_relative": fm.get("pdf_relative", ""),
+            "read": fm.get("id") in rs,
         }
         for key, heading in _SECTIONS:
             doc[key] = section(heading)

@@ -51,7 +51,8 @@ def main():
 
     for i, d in enumerate(results, 1):
         area_zh = d["area"].split("::")[-1] if "::" in d["area"] else d["area"]
-        print(f"{i}. {d['title_en']}  [{d['category']}/{area_zh}/{d['work']}/{d['year']}]")
+        flag = "已读" if d.get("read") else "未读"
+        print(f"{i}. {d['title_en']}  [{d['category']}/{area_zh}/{d['work']}/{d['year']}] · {flag}")
         if d["title_zh"] and d["title_zh"] != d["title_en"]:
             print(f"   {d['title_zh']}")
         for kind, loc in resolve_targets(d, config):

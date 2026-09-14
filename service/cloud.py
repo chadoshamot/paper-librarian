@@ -33,20 +33,21 @@ def _ensure_remote(repo_dir, namespace, repo, token):
 def _sync_repo(repo_dir, namespace, repo, token, message):
     if not (repo_dir / ".git").exists():
         print(f"[cloud] {repo} 尚未初始化 git，跳过")
-        return
+        return False
     _git(repo_dir, "config", "user.name", "shamotsu")
     _git(repo_dir, "config", "user.email", "shamotsu@gmail.com")
     _ensure_remote(repo_dir, namespace, repo, token)
     _git(repo_dir, "add", "-A")
     if not _git(repo_dir, "status", "--porcelain").stdout.strip():
         print(f"[cloud] {repo} 无变更，跳过")
-        return
+        return True
     _git(repo_dir, "commit", "-m", message,
          "-m", "Co-Authored-By: Claude Code <noreply@anthropic.com>")
     p = subprocess.run(["git", "-C", str(repo_dir), "push", "-u", "origin", "master"],
                        capture_output=True, text=True)
     tail = (p.stderr or "").strip()[-300:]
     print(f"[cloud] {repo} push 完成" + (f"\n{tail}" if p.returncode else ""))
+    return p.returncode == 0
 
 
 def _ctx():
@@ -70,6 +71,17 @@ def sync():
                "chore: 同步论文 PDF（git-lfs）")
     _sync_repo(ROOT / "knowledge-base", namespace, cloud["kb_repo"].split("/")[-1], token,
                "chore: 同步双语知识库")
+
+
+def push_kb(message: str = "chore: 保存联网对话") -> bool:
+    """只推送 knowledge-base（含 chat-logs/），返回是否成功；缺 token 返回 False。"""
+    got = _ctx()
+    if not got:
+        return False
+    cfg, token = got
+    cloud = cfg.config["storage"]["cloud"]
+    return _sync_repo(ROOT / "knowledge-base", cloud["namespace"],
+                      cloud["kb_repo"].split("/")[-1], token, message)
 
 
 def pull():

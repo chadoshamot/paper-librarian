@@ -93,6 +93,7 @@ def _serialize_doc(d: dict) -> dict:
         "pid": d["pid"], "title_en": d["title_en"], "title_zh": d["title_zh"],
         "category": d["category"], "area": area, "work": d["work"],
         "year": d["year"], "venue": d["venue"], "arxiv_id": d["arxiv_id"],
+        "read": bool(d.get("read")),
     }
 
 
@@ -238,6 +239,21 @@ def _run_chat(message: str, history: list) -> dict:
     return cc.chat(msgs)
 
 
+def _run_chat_save(history: list) -> dict:
+    from .chatlog import save_and_sync
+    msgs = [{"role": m.get("role", "user"), "content": m.get("content", "")}
+            for m in (history or [])]
+    return save_and_sync(msgs, _cfg())
+
+
+def _run_mark_read(pid: str, read: bool) -> dict:
+    from .read_state import mark, sync_read
+    mark(_cfg(), pid, bool(read))
+    _invalidate_docs()
+    sync_read()
+    return {"pid": pid, "read": bool(read)}
+
+
 def _run_daily_email(to, cands) -> dict:
     from .emailer import send_daily
     return send_daily(cands, to or None)
@@ -338,6 +354,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._handle_reclassify(self._read_json_body())
             if parsed.path == "/api/chat":
                 return self._handle_chat(self._read_json_body())
+            if parsed.path == "/api/chat/save":
+                return self._handle_chat_save(self._read_json_body())
+            if parsed.path == "/api/read":
+                return self._handle_read(self._read_json_body())
             if parsed.path == "/api/daily/run":
                 return self._json({"job_id": _start_job(_run_daily_job)})
             if parsed.path == "/api/daily/email":
@@ -450,6 +470,20 @@ class Handler(BaseHTTPRequestHandler):
         jid = _start_job(lambda: _run_chat(message, body.get("history") or []))
         return self._json({"job_id": jid})
 
+    def _handle_chat_save(self, body):
+        history = body.get("history") or []
+        if not history:
+            return self._json({"error": "没有可保存的对话"}, 400)
+        jid = _start_job(lambda: _run_chat_save(history))
+        return self._json({"job_id": jid})
+
+    def _handle_read(self, body):
+        pid = body.get("pid")
+        if not pid:
+            return self._json({"error": "缺少 pid"}, 400)
+        jid = _start_job(lambda: _run_mark_read(pid, body.get("read", True)))
+        return self._json({"job_id": jid})
+
     def _handle_daily_email(self, body):
         cands = body.get("cands") or []
         if not cands:
@@ -526,6 +560,8 @@ INDEX_HTML = r"""<!doctype html>
   .tag { display:inline-block; font-size:11.5px; padding:2px 8px; border-radius:999px;
          background:var(--acc-weak); color:var(--acc); margin-right:5px; }
   .tag.muted { background:#f1f5f9; color:var(--mut); }
+  .tag.read { background:#ecfdf5; color:#059669; }
+  .tag.unread { background:#fff7ed; color:#ea580c; }
   /* 跳转按钮 */
   .jumps { margin-top:6px; }
   a.jump { display:inline-block; margin:0 8px 6px 0; padding:5px 11px; font-size:12.5px;
@@ -679,6 +715,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="chat-box" id="chat-box"></div>
         <div class="chat-input-row">
           <input type="text" id="chat-input" placeholder="例如：帮我找 2025 年 GPU 集群调度方向的顶会论文" onkeydown="if(event.key==='Enter')sendChat()" />
+          <button class="btn" onclick="saveChat()">💾 保存对话</button>
           <button class="btn primary" onclick="sendChat()">发送</button>
         </div>
       </div>
@@ -754,6 +791,21 @@ function jumpButtons(targets){
     return `<a class="jump" href="${esc(t.url)}" target="_blank" rel="noopener">${KIND[t.kind]||t.kind}</a>`;
   }).join('');
 }
+function readTag(d){
+  return d.read ? '<span class="tag read">已读</span>' : '<span class="tag unread">未读</span>';
+}
+function markRead(pid, read){
+  postFetch('/api/read', {pid, read}).then(r=>{
+    if(r.error){ toast(r.error); return; }
+    toast('标记中…');
+    pollJob(r.job_id, s=>{
+      if(s.status==='error') toast('标记失败：'+s.error);
+      else toast(read?'已标记为已读':'已标记为未读');
+      loadMeta(); loadLibrary();
+      const q = $('#q').value.trim(); if(q) doSearch();
+    });
+  });
+}
 function openOverlay(html){ $('#modal').innerHTML = html; $('#overlay').classList.add('on'); }
 function closeOverlay(){ $('#overlay').classList.remove('on'); $('#modal').innerHTML=''; }
 async function showPaper(pid){
@@ -770,7 +822,7 @@ function detailHTML(d, targets){
       <div>
         <h3>${esc(d.title_en)}</h3>
         ${d.title_zh && d.title_zh!==d.title_en ? `<div class="d-zh">${esc(d.title_zh)}</div>`:''}
-        <div class="d-meta"><span class="tag">${esc(d.category)}</span><span class="tag">${esc(d.area)}</span><span class="tag">${esc(d.work)}</span><span class="tag">${esc(d.year)}</span> ${esc(d.venue||'')}</div>
+        <div class="d-meta">${readTag(d)}<span class="tag">${esc(d.category)}</span><span class="tag">${esc(d.area)}</span><span class="tag">${esc(d.work)}</span><span class="tag">${esc(d.year)}</span> ${esc(d.venue||'')}<button class="btn small" onclick="markRead('${esc(d.pid)}',${!d.read})">${d.read?'标未读':'标已读'}</button></div>
       </div>
       <button class="btn ghost" onclick="closeOverlay()">✕</button>
     </div>
@@ -841,7 +893,7 @@ async function doSearch(){
     el.innerHTML = `<div class="idx">${i+1}</div><div class="r-body">
       <div class="t-en" onclick="showPaper('${esc(d.pid)}')">${esc(d.title_en)}</div>
       <div class="t-zh">${esc(d.title_zh)}</div>
-      <div class="r-tags"><span class="tag">${esc(d.category)}</span><span class="tag">${esc(d.area)}</span><span class="tag">${esc(d.work)}</span><span class="tag">${esc(d.year)}</span></div>
+      <div class="r-tags">${readTag(d)}<span class="tag">${esc(d.category)}</span><span class="tag">${esc(d.area)}</span><span class="tag">${esc(d.work)}</span><span class="tag">${esc(d.year)}</span><button class="btn small" onclick="markRead('${esc(d.pid)}',${!d.read})">${d.read?'标未读':'标已读'}</button></div>
       <div class="jumps">${jumpButtons(d.targets)}</div>
     </div>`;
     wrap.appendChild(el);
@@ -889,7 +941,7 @@ function paperRow(p){
   return `<div class="paper">
     <div class="p-title" onclick="showPaper('${esc(p.pid)}')">${esc(p.title_en)}</div>
     ${p.title_zh && p.title_zh!==p.title_en ? `<div class="p-zh">${esc(p.title_zh)}</div>`:''}
-    <div class="r-tags"><span class="tag">${esc(p.category)}</span><span class="tag">${esc(p.year)}</span>${p.venue?`<span class="tag muted">${esc(p.venue)}</span>`:''}</div>
+    <div class="r-tags">${readTag(p)}<span class="tag">${esc(p.category)}</span><span class="tag">${esc(p.year)}</span>${p.venue?`<span class="tag muted">${esc(p.venue)}</span>`:''}<button class="btn small" onclick="markRead('${esc(p.pid)}',${!p.read})">${p.read?'标未读':'标已读'}</button></div>
     <div class="jumps">${jumpButtons(p.targets)}</div>
   </div>`;
 }
@@ -920,7 +972,7 @@ function renderDaily(){
     el.innerHTML = `
       <div class="cand-head"><input type="checkbox" class="cand-check" data-i="${i}" checked>
         <div class="cand-title">${esc(c.title)}</div><span class="score">${Number(c.score).toFixed(3)}</span></div>
-      <div class="cand-meta">${esc(c.year||'?')} · ${esc(c.venue||'未知')} · 被引 ${c.citations||0}</div>
+      <div class="cand-meta"><span class="tag unread">未读</span>${esc(c.year||'?')} · ${esc(c.venue||'未知')} · 被引 ${c.citations||0}</div>
       ${c.llm_reason?`<div class="cand-reason">${esc(c.llm_reason)}</div>`:''}
       ${c.abstract?`<div class="cand-abs">${esc(c.abstract.slice(0,240))}…</div>`:''}
       <div class="cand-actions">${c.url?`<a class="jump" href="${esc(c.url)}" target="_blank" rel="noopener">原文</a>`:''}<button class="btn small primary" onclick="addToLib(${i}, this)">＋ 推入论文库</button></div>`;
@@ -1003,6 +1055,17 @@ async function sendChat(){
     typing(false);
     if(s.status==='error') addChatMsg('assistant', '❌ '+s.error);
     else addChatMsg('assistant', (s.result && s.result.answer) || '(空回答)');
+  });
+}
+function saveChat(){
+  if(!chatHistory.length){ toast('暂无对话可保存'); return; }
+  postFetch('/api/chat/save', {history: chatHistory}).then(r=>{
+    if(r.error){ toast(r.error); return; }
+    toast('保存中…');
+    pollJob(r.job_id, s=>{
+      if(s.status==='error') toast('保存失败：'+s.error);
+      else toast('已保存'+(s.result && s.result.pushed ? '并推送 ModelScope' : '（本地）'));
+    });
   });
 }
 
