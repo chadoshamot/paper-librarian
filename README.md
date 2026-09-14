@@ -1,6 +1,6 @@
 # AI 论文管家（Paper Librarian）
 
-本地 AI 论文管家：录入 PDF → 双语知识库 → 语义检索/跳转 → 云端同步（ModelScope）→ 每日检索 → 馆长 agent（知识库问答/深读）→ 联网对话。一个可复现、密钥自带的个人论文管理 agent。
+本地 AI 论文管家：录入 PDF → 双语知识库 → 语义检索/跳转 → 云端同步（ModelScope）→ 每日检索 → 统一馆长 agent（查库/深读/联网搜索/下载/上云/删除）。一个可复现、密钥自带的个人论文管理 agent。
 
 ## 功能
 
@@ -8,10 +8,9 @@
 - **检索**：语义向量 + 关键词 + 标题加权（fastembed + jina-v2-base-zh），精准 / 探索（MMR）两种模式
 - **论文库**：大领域 → 方向 → work 三级目录树；跳原文（arXiv / DOI / 云端 / Zotero / 本地）
 - **每日检索**：多源抓取 + 质量评分 + LLM 裁判，输出日报，可推库 / 发邮箱
-- **馆长 agent**：知识库问答（DeepSeek），可**深读论文全文**（读 PDF + LLM 分析）、自主维护记忆与深读笔记、带 pid 引用回答
-- **联网对话**：Kimi 官方 web-search，全网检索并带引用回答
+- **馆长 agent**（统一入口，DeepSeek 总控）：查库问答、**深读论文全文**、维护记忆与笔记、带 pid 引用回答；需要联网时自动调 **Kimi web-search**（Kimi 只搜、DeepSeek 拍板）；可**下载论文到本地并自动录入**、**推送到 ModelScope**、**删除/重分类/标记已读**等——凡用户在网页能做的它都能做（危险操作先列计划等你确认）
 - **上云**：ModelScope 增量同步（PDF 走 git-lfs，KB 走 Markdown）
-- **界面**：交互式 CLI + 零依赖 Web 界面（右侧常驻聊天栏，知识库问答 / 联网对话一键切换，可拖拽调宽）
+- **界面**：交互式 CLI + 零依赖 Web 界面（右侧常驻聊天栏 = 统一馆长 agent，可拖拽调宽）
 
 ## 快速开始
 
@@ -36,7 +35,7 @@ python setup.py
 ```bash
 python -m service          # 交互式 CLI（主菜单：检索 / 论文库 / 每日简报 / 上传 / 云端同步 / 联网对话）
 python -m service.web      # 网页界面，浏览器打开 http://127.0.0.1:8000
-                           #   右侧常驻聊天栏：知识库问答（DeepSeek）/ 联网对话（Kimi）两模式切换，可拖拽调宽
+                           #   右侧常驻聊天栏：统一馆长 agent（查库/深读/联网搜索/下载/上云/删除），可拖拽调宽
 ```
 
 ## 密钥获取指引
@@ -47,7 +46,7 @@ python -m service.web      # 网页界面，浏览器打开 http://127.0.0.1:800
 |---|---|---|---|
 | DeepSeek | `DEEPSEEK_API_KEY` | 是（分类/摘要/每日裁判/馆长 agent） | [platform.deepseek.com](https://platform.deepseek.com) → API Keys |
 | ModelScope | `MODELSCOPE_TOKEN` | 自建库模式需要 | [modelscope.cn](https://modelscope.cn) → 个人中心 → 访问令牌 |
-| Kimi | `MOONSHOT_API_KEY` | 否（联网对话） | [platform.moonshot.cn](https://platform.moonshot.cn) → API Key |
+| Kimi | `MOONSHOT_API_KEY` | 否（馆长联网搜索） | [platform.moonshot.cn](https://platform.moonshot.cn) → API Key |
 | Zotero | `ZOTERO_USER_ID` / `ZOTERO_API_KEY` | 否（Zotero 链接） | [zotero.org/settings/keys](https://www.zotero.org/settings/keys) → 新建 key |
 | 邮箱 | `SMTP_HOST/PORT/USER/PASS/TO` | 否（邮件推送） | QQ 邮箱 → 设置 → 账户 → 开启 SMTP → 生成授权码 |
 
@@ -71,19 +70,21 @@ python -m service.daily [--top 10] [--sources openalex,arxiv,semantic_scholar] [
 python -m service.web [--host 127.0.0.1 --port 8000]       # Web 界面
 ```
 
-## 馆长 agent（知识库问答 / 深读）
+## 馆长 agent（统一入口）
 
-Web 界面右侧聊天栏的「知识库问答」模式，背后是一个**会查库、会读全文、有自己记忆**的馆长 agent（DeepSeek）：
+Web 界面右侧聊天栏背后是一个**会查库、会读全文、会联网搜索、会维护库、有自己记忆**的馆长 agent。它以 **DeepSeek 为主体**掌握全局与决策，只在需要联网时调 **Kimi web-search**（Kimi 只搜、结果回传 DeepSeek 拍板）。
 
 - **身份与规范**：根目录 [AGENT.md](AGENT.md) 是它的操作手册（身份 / 任务 / 工具 / 记忆规范 / 回答规范 / 禁止事项），每次问答前自动加载——想调整它的行为，改这个文件即可。
-- **查库**：`search_library` / `get_paper` / `library_stats` / `list_by_area` / `compare_papers`，回答里用反引号给出可点击的 pid 引用。
-- **深读全文**：`deep_read` 读取 PDF 全文（纯 Python 的 pypdf，无需额外安装）并用 LLM 做结构化分析（问题 / 方法 / 贡献 / 实验 / 与你研究的关联），产出远深于摘要级 KB 的理解。
+- **查库 / 深读**：`search_library` / `get_paper` / `deep_read` / `compare_papers` / `library_stats` / `list_by_area`，回答里用反引号给出可点击的 pid 引用；`deep_read` 读 PDF 全文并做结构化分析。
+- **联网搜索**：`web_search`（Kimi），查库外最新进展 / 资料，带来源链接。
+- **维护库 / 下载 / 上云 / 每日检索**：`download_paper`（下载并自动录入）、`ingest_paper`、`reclassify_paper`、`edit_paper`（改标题 / venue / 年份）、`fix_metadata`（重抓 arXiv 修标题）、`mark_read`、`pull_library`、`push_to_cloud`、`delete_paper`、`run_daily_retrieval`、`read_daily_report`、`send_daily_email`——凡用户在网页能做的它都能做。
+- **危险操作先确认**：`delete_paper` / `push_to_cloud`（推送到公开 ModelScope）只先生成计划，等你在对话里点「确认执行」后才真正执行。
 - **自己的记忆**（仅存本地、不上云）：
   - 全局记忆 `agent-memory.md`（你的画像 / 偏好 / 纠错）；
   - 单篇深读笔记 `agent-notes/{pid}.md`（深读分析 + 对话中逐步积累的洞察，可随对话进化）。
-- **模型可换**：默认 `deepseek-chat`，改 `config.yml` 的 `model.tasks.librarian` 即可。
+- **模型可换**：默认 `deepseek-chat`（改 `config.yml` 的 `model.tasks.librarian`）；联网检索模型改 `chat` 段。
 
-用法：浏览器打开 Web 界面，在右侧聊天栏选「知识库问答」直接提问（如「深入读一下 Gavel 的核心调度机制」）。
+用法：浏览器打开 Web 界面，直接在右侧聊天栏提问（如「深入读一下 Gavel 的核心调度机制」「网上搜一下最近 GPU 调度的最新进展」）。
 
 ## 每日检索与定时
 

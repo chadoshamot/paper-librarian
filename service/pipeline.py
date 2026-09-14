@@ -1,5 +1,6 @@
 """录入管线：PDF → 元数据 → 分类 → 重命名 → 组织 → Zotero → KB 条目 → manifest。"""
 import json
+import re
 import shutil
 from datetime import date
 from pathlib import Path
@@ -10,6 +11,11 @@ from .llm import LLM
 from .manifest import Manifest
 from .metadata import fetch_arxiv, parse_filename, year_from_arxiv_id
 from .zotero_client import ZoteroClient
+
+
+def _yaml_str(s) -> str:
+    """把字符串序列化成 YAML 双引号标量（转义反斜杠与双引号）。"""
+    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 class IngestPipeline:
@@ -98,6 +104,67 @@ class IngestPipeline:
         self.manifest.save()
         return self.run(pdf_path, override={"category": category, "area": area,
                                             "work": work, "year": year})
+
+    def delete(self, pid: str) -> dict:
+        """删除一篇已入库论文：Zotero 条目 + 本地缓存 PDF + KB 卡片 + manifest 条目。"""
+        old = self.manifest.get(pid)
+        if not old:
+            raise ValueError(f"未找到已入库论文: {pid}")
+        if old.get("zotero_key"):
+            self.zotero.delete_item(old["zotero_key"])
+        if old.get("path"):
+            p = Path(old["path"])
+            p.unlink(missing_ok=True)
+            area = (old.get("area") or "").split("::")[-1]
+            work = (old.get("work_slugs") or [""])[0]
+            kb = self.config.root / "knowledge-base" / "fields" / area / work / (p.stem + ".md")
+            kb.unlink(missing_ok=True)
+        self.manifest.data["entries"].pop(pid, None)
+        self.manifest.save()
+        return {"pid": pid, "deleted": True}
+
+    def update_metadata(self, pid: str, **fields) -> dict:
+        """就地更新一篇已入库论文的元数据（title_en/title_zh/venue/year）。
+
+        改 KB 卡片 frontmatter + manifest；Zotero 标题尽力同步（失败不抛）。
+        """
+        entry = self.manifest.get(pid)
+        if not entry or not entry.get("path"):
+            raise ValueError(f"未找到已入库论文: {pid}")
+        p = Path(entry["path"])
+        area_zh = (entry.get("area") or "").split("::")[-1]
+        work = (entry.get("work_slugs") or [""])[0]
+        kb = self.config.root / "knowledge-base" / "fields" / area_zh / work / (p.stem + ".md")
+        if not kb.exists():
+            raise ValueError(f"找不到知识库卡片: {kb}")
+
+        txt = kb.read_text(encoding="utf-8")
+        parts = txt.split("---", 2)
+        if len(parts) < 3:
+            raise ValueError(f"知识库卡片 frontmatter 缺失: {kb}")
+        fm = parts[1]
+        updated = []
+        for key in ("title_en", "title_zh", "venue"):
+            if key in fields:
+                fm = re.sub(rf"(?m)^{key}:.*$", f"{key}: {_yaml_str(fields[key])}", fm, count=1)
+                updated.append(key)
+        if "year" in fields:
+            fm = re.sub(r"(?m)^year:.*$", f"year: {int(fields['year'])}", fm, count=1)
+            updated.append("year")
+        kb.write_text(parts[0] + "---" + fm + "---" + parts[2], encoding="utf-8")
+
+        man = {}
+        if "title_en" in fields:
+            man["title"] = fields["title_en"]
+        if "year" in fields:
+            man["year"] = int(fields["year"])
+        if man:
+            self.manifest.upsert(pid, **man)
+
+        if "title_en" in fields and entry.get("zotero_key"):
+            self.zotero.update_title(entry["zotero_key"], fields["title_en"])
+
+        return {"pid": pid, "updated": updated}
 
     def _make_name(self, category, area, work, year):
         area_zh = area.split("::")[-1]

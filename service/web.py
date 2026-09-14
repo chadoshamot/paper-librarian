@@ -13,8 +13,8 @@
     GET  /pdf/<pid>             本地 PDF 流式回传（站内预览）
     GET  /api/daily/latest      最近一份每日简报
     GET  /api/job/<id>          后台任务进度
-    POST /api/chat              Kimi 联网对话（LLM 自己联网检索并返回论文链接）
-    POST /api/librarian         馆长 agent 知识库问答（DeepSeek 查库 + 本地记忆）
+    POST /api/librarian         馆长 agent（DeepSeek 总控：查库/深读/联网检索 Kimi/下载/上云/删除）
+    POST /api/librarian/confirm 确认执行馆长排定的危险操作（删除/上云）
     POST /api/ingest            上传 PDF 并入库
     POST /api/reclassify        重分类
     POST /api/daily/run         跑一次每日检索
@@ -211,24 +211,9 @@ def _run_reclassify(pid, category, area, work, year) -> dict:
 
 def _run_delete(pid) -> dict:
     from .pipeline import IngestPipeline
-    cfg = _cfg()
-    pipe = IngestPipeline(cfg)
-    old = pipe.manifest.get(pid)
-    if not old:
-        raise ValueError(f"未找到已入库论文: {pid}")
-    if old.get("zotero_key"):
-        pipe.zotero.delete_item(old["zotero_key"])
-    if old.get("path"):
-        p = Path(old["path"])
-        p.unlink(missing_ok=True)
-        area = (old.get("area") or "").split("::")[-1]
-        work = (old.get("work_slugs") or [""])[0]
-        kb = cfg.root / "knowledge-base" / "fields" / area / work / (p.stem + ".md")
-        kb.unlink(missing_ok=True)
-    pipe.manifest.data["entries"].pop(pid, None)
-    pipe.manifest.save()
+    result = IngestPipeline(_cfg()).delete(pid)
     _invalidate_docs()
-    return _sync_after({"pid": pid, "deleted": True})
+    return _sync_after(result)
 
 
 def _run_chat(message: str, history: list) -> dict:
@@ -252,14 +237,27 @@ def _run_librarian(message: str, history: list) -> dict:
     lib = Librarian(_cfg())
     msgs = [{"role": m.get("role", "user"), "content": m.get("content", "")}
             for m in (history or [])]
-    return lib.ask(message, msgs)
+    result = lib.ask(message, msgs)
+    # 馆长本轮可能已改库（edit_paper / fix_metadata / reclassify_paper / mark_read /
+    # ingest_paper / download_paper 等都在 ask() 内同步执行）。统一失效 _DOCS 缓存，
+    # 保证下次检索/卡片/统计从 KB 卡片（单一事实源）重读，而非旧缓存。
+    _invalidate_docs()
+    return result
+
+
+def _run_librarian_confirm(action_id: str, approve: bool) -> dict:
+    from .librarian import confirm
+    result = confirm(action_id, bool(approve))
+    # 确认后可能已删除论文（delete）或 pull/push 云端，失效缓存保持一致。
+    _invalidate_docs()
+    return result
 
 
 def _run_mark_read(pid: str, read: bool) -> dict:
     from .read_state import mark, sync_read
     mark(_cfg(), pid, bool(read))
     _invalidate_docs()
-    sync_read()
+    sync_read(_cfg())
     return {"pid": pid, "read": bool(read)}
 
 
@@ -295,6 +293,8 @@ def _run_library_sync() -> dict:
     from .cloud import pull, sync
     pull()
     sync()
+    # pull 会用远端知识库覆盖本地 KB 卡片，必须失效缓存。
+    _invalidate_docs()
     return {"ok": True}
 
 
@@ -367,6 +367,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._handle_chat_save(self._read_json_body())
             if parsed.path == "/api/librarian":
                 return self._handle_librarian(self._read_json_body())
+            if parsed.path == "/api/librarian/confirm":
+                return self._handle_librarian_confirm(self._read_json_body())
             if parsed.path == "/api/read":
                 return self._handle_read(self._read_json_body())
             if parsed.path == "/api/daily/run":
@@ -493,6 +495,13 @@ class Handler(BaseHTTPRequestHandler):
         if not message:
             return self._json({"error": "缺少 message"}, 400)
         jid = _start_job(lambda: _run_librarian(message, body.get("history") or []))
+        return self._json({"job_id": jid})
+
+    def _handle_librarian_confirm(self, body):
+        action_id = body.get("action_id")
+        if not action_id:
+            return self._json({"error": "缺少 action_id"}, 400)
+        jid = _start_job(lambda: _run_librarian_confirm(action_id, body.get("approve", True)))
         return self._json({"job_id": jid})
 
     def _handle_read(self, body):
@@ -699,13 +708,11 @@ INDEX_HTML = r"""<!doctype html>
 
   /* ── 聊天（右侧常驻栏）── */
   .chat-head { padding:12px 14px; border-bottom:2px solid var(--ink); }
-  .mode-toggle { display:flex; gap:0; border:1px solid var(--ink); border-radius:0; padding:0; }
-  .mode-toggle button { flex:1; border:0; background:none; padding:7px 10px; border-radius:0;
-                        font-family:var(--sans); font-size:12px; text-transform:uppercase; letter-spacing:.05em;
-                        cursor:pointer; color:var(--mut); }
-  .mode-toggle button + button { border-left:1px solid var(--ink); }
-  .mode-toggle button.on { background:var(--ink); color:var(--bg); font-weight:600; }
+  .chat-title { font-family:var(--serif); font-weight:700; font-size:16px; letter-spacing:.02em; }
   .chat-hint { color:var(--mut); font-size:12px; line-height:1.5; margin-top:8px; }
+  .pending-box { border:2px solid var(--acc); background:var(--bg); padding:8px 10px; margin-top:8px; font-size:13px; }
+  .pending-btns { display:flex; gap:8px; margin-top:8px; }
+  .pending-btns .btn { padding:5px 12px; }
   .chat-box { flex:1; min-height:0; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
   .msg { max-width:92%; padding:9px 13px; border:1px solid var(--ink); border-radius:0; font-size:14px; line-height:1.6; }
   .msg.user { align-self:flex-end; background:var(--ink); color:var(--bg); }
@@ -814,16 +821,13 @@ INDEX_HTML = r"""<!doctype html>
 <div class="rail-resizer" id="rail-resizer"></div>
 <aside class="chat-rail" id="chat-rail">
   <div class="chat-head">
-    <div class="mode-toggle">
-      <button data-mode="kb" class="on">知识库问答</button>
-      <button data-mode="web">联网对话</button>
-    </div>
-    <div class="chat-hint" id="chat-hint">问它论文库里的任何问题（讲解 / 对比 / 推荐 / 统计）——DeepSeek 查库作答</div>
+    <div class="chat-title">馆长</div>
+    <div class="chat-hint" id="chat-hint">查库 · 深读 · 全网搜索 · 下载 · 上云 · 删除——一个馆长全搞定</div>
   </div>
   <div class="chat-box" id="chat-box"></div>
   <div class="input-resizer" id="input-resizer" title="拖动调整输入框高度"></div>
   <div class="chat-input-row">
-    <textarea id="chat-input" rows="2" placeholder="问论文库…或切到「联网对话」问全网（Enter 发送，Shift+Enter 换行）" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
+    <textarea id="chat-input" rows="2" placeholder="问论文库 / 联网搜索 / 下载 / 上云…（Enter 发送，Shift+Enter 换行）" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
     <button class="btn" onclick="saveChat()" title="保存当前对话">💾</button>
     <button class="btn primary" onclick="sendChat()">发送</button>
   </div>
@@ -838,8 +842,7 @@ INDEX_HTML = r"""<!doctype html>
 const $ = s => document.querySelector(s);
 let META = {categories:[], areas:[], work_slugs:[]};
 let LIB = null, DAILY = [];
-let chatMode = 'kb';
-let hist = {kb:[], web:[]};
+let hist = [];
 const FILTER = {cat:null, field:null};
 const KIND = {arxiv:'arXiv', doi:'DOI', cloud:'云', zotero:'Zotero', local:'预览'};
 
@@ -1127,16 +1130,8 @@ async function ingest(){
   });
 }
 
-// ── 对话（右侧常驻栏：知识库问答 DeepSeek / 联网对话 Kimi）──
-function activeHist(){ return hist[chatMode]; }
-function switchMode(mode){
-  chatMode = mode;
-  document.querySelectorAll('.mode-toggle button').forEach(b=>b.classList.toggle('on', b.dataset.mode===mode));
-  $('#chat-hint').textContent = mode==='kb'
-    ? '问它论文库里的任何问题（讲解 / 对比 / 推荐 / 统计）——DeepSeek 查库作答'
-    : '联网检索最新论文与资料——Kimi web_search';
-  renderChat();
-}
+// ── 对话（右侧常驻栏：馆长 agent，DeepSeek 总控 + Kimi 联网检索）──
+function activeHist(){ return hist; }
 function linkPid(html){
   return html.replace(/`(local:[A-Za-z0-9_.-]+|\d{4}\.\d{4,5})`/g,
     (m,pid)=>`<a class="jump" href="javascript:void(0)" onclick="showPaper('${pid}')">${pid}</a>`);
@@ -1145,9 +1140,7 @@ function appendMsg(role, content, citations){
   const box = $('#chat-box');
   const el = document.createElement('div');
   el.className = 'msg '+role;
-  let inner = role==='assistant'
-    ? (chatMode==='kb' ? linkPid(fmtMD(content)) : fmtMD(content))
-    : esc(content);
+  let inner = role==='assistant' ? linkPid(fmtMD(content)) : esc(content);
   if(role==='assistant' && citations && citations.length){
     inner += '<div class="cites">' + citations.map(c=>
       `<span class="cite" title="${esc(c.title_en)}" onclick="showPaper('${esc(c.pid)}')">📄 ${esc(c.pid)}</span>`).join('') + '</div>';
@@ -1166,7 +1159,7 @@ function renderChat(){
 }
 function typing(bool){
   let el = $('#chat-typing');
-  if(bool && !el){ el=document.createElement('div'); el.id='chat-typing'; el.className='msg assistant typing'; el.textContent = chatMode==='kb' ? '查库中…' : '联网检索中…'; $('#chat-box').appendChild(el); $('#chat-box').scrollTop=$('#chat-box').scrollHeight; }
+  if(bool && !el){ el=document.createElement('div'); el.id='chat-typing'; el.className='msg assistant typing'; el.textContent = '馆长处理中…'; $('#chat-box').appendChild(el); $('#chat-box').scrollTop=$('#chat-box').scrollHeight; }
   if(!bool && el) el.remove();
 }
 async function sendChat(){
@@ -1174,8 +1167,7 @@ async function sendChat(){
   inp.value='';
   addChatMsg('user', msg);
   const history = activeHist().slice(0, -1).map(m=>({role:m.role, content:m.content}));
-  const url = chatMode==='kb' ? '/api/librarian' : '/api/chat';
-  const r = await postFetch(url, {message:msg, history});
+  const r = await postFetch('/api/librarian', {message:msg, history});
   if(r.error){ addChatMsg('assistant', '❌ '+r.error); return; }
   typing(true);
   pollJob(r.job_id, s=>{
@@ -1184,7 +1176,34 @@ async function sendChat(){
     else {
       const res = s.result || {};
       addChatMsg('assistant', res.answer || '(空回答)', res.citations);
+      if(res.pending_action) renderPending(res.pending_action);
     }
+  });
+}
+function renderPending(pa){
+  const box = $('#chat-box');
+  const el = document.createElement('div');
+  el.className = 'msg assistant';
+  el.innerHTML = `<div class="pending-box">⚠️ 计划待确认：${esc(pa.summary)}</div>
+    <div class="pending-btns">
+      <button class="btn primary" onclick="confirmAction('${esc(pa.action_id)}', true, this)">确认执行</button>
+      <button class="btn" onclick="confirmAction('${esc(pa.action_id)}', false, this)">取消</button>
+    </div>`;
+  box.appendChild(el); box.scrollTop = box.scrollHeight;
+}
+async function confirmAction(actionId, approve, btn){
+  btn.disabled = true;
+  const r = await postFetch('/api/librarian/confirm', {action_id: actionId, approve});
+  if(r.error){ toast('❌ '+r.error); btn.disabled = false; return; }
+  toast(approve ? '执行中…' : '已取消');
+  pollJob(r.job_id, s=>{
+    btn.disabled = false;
+    if(s.status==='error'){ toast('❌ '+s.error); return; }
+    const res = s.result || {};
+    if(res.cancelled) toast('已取消');
+    else if(res.error) toast('❌ '+res.error);
+    else if(res.executed){ toast('已执行：'+res.action); loadMeta(); loadLibrary(); }
+    else toast('完成');
   });
 }
 function saveChat(){
@@ -1199,8 +1218,6 @@ function saveChat(){
     });
   });
 }
-document.querySelectorAll('.mode-toggle button').forEach(b=>b.onclick=()=>switchMode(b.dataset.mode));
-
 // ── 侧栏拖拽调宽 ──
 (function(){
   const rail = $('#chat-rail'), rz = $('#rail-resizer');
