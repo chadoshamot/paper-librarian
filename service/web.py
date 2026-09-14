@@ -14,6 +14,7 @@
     GET  /api/daily/latest      最近一份每日简报
     GET  /api/job/<id>          后台任务进度
     POST /api/chat              Kimi 联网对话（LLM 自己联网检索并返回论文链接）
+    POST /api/librarian         馆长 agent 知识库问答（DeepSeek 查库 + 本地记忆）
     POST /api/ingest            上传 PDF 并入库
     POST /api/reclassify        重分类
     POST /api/daily/run         跑一次每日检索
@@ -246,6 +247,14 @@ def _run_chat_save(history: list) -> dict:
     return save_and_sync(msgs, _cfg())
 
 
+def _run_librarian(message: str, history: list) -> dict:
+    from .librarian import Librarian
+    lib = Librarian(_cfg())
+    msgs = [{"role": m.get("role", "user"), "content": m.get("content", "")}
+            for m in (history or [])]
+    return lib.ask(message, msgs)
+
+
 def _run_mark_read(pid: str, read: bool) -> dict:
     from .read_state import mark, sync_read
     mark(_cfg(), pid, bool(read))
@@ -356,6 +365,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._handle_chat(self._read_json_body())
             if parsed.path == "/api/chat/save":
                 return self._handle_chat_save(self._read_json_body())
+            if parsed.path == "/api/librarian":
+                return self._handle_librarian(self._read_json_body())
             if parsed.path == "/api/read":
                 return self._handle_read(self._read_json_body())
             if parsed.path == "/api/daily/run":
@@ -477,6 +488,13 @@ class Handler(BaseHTTPRequestHandler):
         jid = _start_job(lambda: _run_chat_save(history))
         return self._json({"job_id": jid})
 
+    def _handle_librarian(self, body):
+        message = (body.get("message") or "").strip()
+        if not message:
+            return self._json({"error": "缺少 message"}, 400)
+        jid = _start_job(lambda: _run_librarian(message, body.get("history") or []))
+        return self._json({"job_id": jid})
+
     def _handle_read(self, body):
         pid = body.get("pid")
         if not pid:
@@ -532,7 +550,13 @@ INDEX_HTML = r"""<!doctype html>
                border-bottom:2px solid transparent; color:var(--mut); transition:color .15s; }
   nav button:hover { color:var(--ink); }
   nav button.on { color:var(--acc); border-bottom-color:var(--acc); font-weight:600; }
-  main { padding:22px 24px 60px; max-width:1240px; margin:0 auto; }
+  .app { display:flex; align-items:stretch; }
+  main.content { flex:1; min-width:0; padding:22px 24px 60px; max-width:1020px; margin:0 auto; }
+  .chat-rail { width:380px; flex-shrink:0; border-left:1px solid var(--line); background:var(--card);
+               display:flex; flex-direction:column; position:sticky; top:100px; height:calc(100vh - 100px); }
+  .rail-resizer { width:6px; flex-shrink:0; cursor:col-resize; position:relative; }
+  .rail-resizer::after { content:''; position:absolute; left:2px; top:0; bottom:0; width:2px; background:var(--line); }
+  .rail-resizer:hover::after, .rail-resizer.drag::after { background:var(--acc); }
   .panel { display:none; } .panel.on { display:block; animation:fade .2s ease; }
   @keyframes fade { from{opacity:0; transform:translateY(4px)} to{opacity:1; transform:none} }
   .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
@@ -631,14 +655,24 @@ INDEX_HTML = r"""<!doctype html>
   .cand-reason { color:var(--acc); font-size:12.5px; margin:4px 0 0 26px; }
   .cand-abs { color:var(--mut); font-size:12.5px; margin:5px 0 0 26px; line-height:1.5; }
   .cand-actions { margin:8px 0 0 26px; }
-  /* 聊天 */
-  .chat-box { height:440px; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:10px; }
-  .msg { max-width:85%; padding:9px 13px; border-radius:12px; font-size:14px; line-height:1.55; }
+  /* 聊天（右侧常驻栏） */
+  .chat-head { padding:12px 14px; border-bottom:1px solid var(--line); }
+  .mode-toggle { display:flex; gap:4px; background:#f1f5f9; border-radius:8px; padding:3px; }
+  .mode-toggle button { flex:1; border:0; background:none; padding:7px 10px; border-radius:6px;
+                        font-size:13px; cursor:pointer; color:var(--mut); }
+  .mode-toggle button.on { background:var(--card); color:var(--acc); font-weight:600; box-shadow:var(--shadow); }
+  .chat-hint { color:var(--mut); font-size:12px; line-height:1.5; margin-top:8px; }
+  .chat-box { flex:1; min-height:0; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:92%; padding:9px 13px; border-radius:12px; font-size:14px; line-height:1.55; }
   .msg.user { align-self:flex-end; background:var(--acc); color:#fff; border-bottom-right-radius:4px; }
   .msg.assistant { align-self:flex-start; background:#f1f5f9; color:var(--ink); border-bottom-left-radius:4px; }
   .msg.typing { color:var(--mut); font-style:italic; }
   .msg a { color:var(--acc); }
-  .chat-input-row { display:flex; gap:8px; margin-top:10px; }
+  .cites { margin-top:7px; display:flex; flex-wrap:wrap; gap:6px; }
+  .cite { font-size:11.5px; padding:3px 9px; border:1px solid var(--line); border-radius:999px; cursor:pointer;
+          background:var(--acc-weak); color:var(--acc); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cite:hover { border-color:var(--acc); }
+  .chat-input-row { display:flex; gap:8px; padding:12px 14px; border-top:1px solid var(--line); }
   .chat-input-row input { flex:1; }
   pre { background:#0f172a; color:#d1fae5; padding:12px; border-radius:8px; overflow:auto;
         font-size:12px; line-height:1.5; max-height:300px; }
@@ -649,6 +683,9 @@ INDEX_HTML = r"""<!doctype html>
   @media (max-width:900px){
     .lib-wrap, .daily-layout { flex-direction:column; }
     .sidebar, .chat-panel { position:static; width:100%; }
+    .app { flex-direction:column; }
+    .chat-rail { width:100% !important; height:520px; position:static; border-left:0; border-top:1px solid var(--line); }
+    .rail-resizer { display:none; }
   }
   @media (prefers-reduced-motion: reduce){
     * { animation:none !important; transition:none !important; }
@@ -663,7 +700,8 @@ INDEX_HTML = r"""<!doctype html>
   <button data-tab="daily">每日简报</button>
   <button data-tab="upload">上传论文</button>
 </nav>
-<main>
+<div class="app">
+<main class="content">
   <!-- 检索 -->
   <section id="tab-search" class="panel on">
     <div class="row">
@@ -707,19 +745,7 @@ INDEX_HTML = r"""<!doctype html>
       <span class="muted" id="daily-status"></span>
       <span class="muted" id="daily-date" style="margin-left:auto"></span>
     </div>
-    <div class="daily-layout">
-      <div class="daily-left card" id="daily-list"></div>
-      <div class="chat-panel card">
-        <b style="font-size:14px">与 LLM 对话 · 联网检索</b>
-        <div class="hint" style="margin:2px 0 8px">告诉它你的研究方向/想找的论文，它自己联网搜并返回论文链接。</div>
-        <div class="chat-box" id="chat-box"></div>
-        <div class="chat-input-row">
-          <input type="text" id="chat-input" placeholder="例如：帮我找 2025 年 GPU 集群调度方向的顶会论文" onkeydown="if(event.key==='Enter')sendChat()" />
-          <button class="btn" onclick="saveChat()">💾 保存对话</button>
-          <button class="btn primary" onclick="sendChat()">发送</button>
-        </div>
-      </div>
-    </div>
+    <div class="daily-left card" id="daily-list"></div>
   </section>
 
   <!-- 上传论文 -->
@@ -733,6 +759,24 @@ INDEX_HTML = r"""<!doctype html>
   </section>
 </main>
 
+<div class="rail-resizer" id="rail-resizer"></div>
+<aside class="chat-rail" id="chat-rail">
+  <div class="chat-head">
+    <div class="mode-toggle">
+      <button data-mode="kb" class="on">知识库问答</button>
+      <button data-mode="web">联网对话</button>
+    </div>
+    <div class="chat-hint" id="chat-hint">问它论文库里的任何问题（讲解 / 对比 / 推荐 / 统计）——DeepSeek 查库作答</div>
+  </div>
+  <div class="chat-box" id="chat-box"></div>
+  <div class="chat-input-row">
+    <input type="text" id="chat-input" placeholder="问论文库…或切到「联网对话」问全网" onkeydown="if(event.key==='Enter')sendChat()" />
+    <button class="btn" onclick="saveChat()" title="保存当前对话">💾</button>
+    <button class="btn primary" onclick="sendChat()">发送</button>
+  </div>
+</aside>
+</div>
+
 <div class="overlay" id="overlay" onclick="if(event.target===this)closeOverlay()">
   <div class="modal" id="modal"></div>
 </div>
@@ -741,7 +785,8 @@ INDEX_HTML = r"""<!doctype html>
 const $ = s => document.querySelector(s);
 let META = {categories:[], areas:[], work_slugs:[]};
 let LIB = null, DAILY = [];
-let chatHistory = [];
+let chatMode = 'kb';
+let hist = {kb:[], web:[]};
 const FILTER = {cat:null, field:null};
 const KIND = {arxiv:'arXiv', doi:'DOI', cloud:'云', zotero:'Zotero', local:'预览'};
 
@@ -1029,37 +1074,70 @@ async function ingest(){
   });
 }
 
-// ── 对话 ──
-function addChatMsg(role, content){
-  chatHistory.push({role, content});
+// ── 对话（右侧常驻栏：知识库问答 DeepSeek / 联网对话 Kimi）──
+function activeHist(){ return hist[chatMode]; }
+function switchMode(mode){
+  chatMode = mode;
+  document.querySelectorAll('.mode-toggle button').forEach(b=>b.classList.toggle('on', b.dataset.mode===mode));
+  $('#chat-hint').textContent = mode==='kb'
+    ? '问它论文库里的任何问题（讲解 / 对比 / 推荐 / 统计）——DeepSeek 查库作答'
+    : '联网检索最新论文与资料——Kimi web_search';
+  renderChat();
+}
+function linkPid(html){
+  return html.replace(/`(local:[A-Za-z0-9_.-]+|\d{4}\.\d{4,5})`/g,
+    (m,pid)=>`<a class="jump" href="javascript:void(0)" onclick="showPaper('${pid}')">${pid}</a>`);
+}
+function appendMsg(role, content, citations){
   const box = $('#chat-box');
   const el = document.createElement('div');
   el.className = 'msg '+role;
-  el.innerHTML = role==='assistant' ? fmtMD(content) : esc(content);
+  let inner = role==='assistant'
+    ? (chatMode==='kb' ? linkPid(fmtMD(content)) : fmtMD(content))
+    : esc(content);
+  if(role==='assistant' && citations && citations.length){
+    inner += '<div class="cites">' + citations.map(c=>
+      `<span class="cite" title="${esc(c.title_en)}" onclick="showPaper('${esc(c.pid)}')">📄 ${esc(c.pid)}</span>`).join('') + '</div>';
+  }
+  el.innerHTML = inner;
   box.appendChild(el); box.scrollTop = box.scrollHeight;
+}
+function addChatMsg(role, content, citations){
+  activeHist().push({role, content, citations: citations||undefined});
+  appendMsg(role, content, citations);
+}
+function renderChat(){
+  const box = $('#chat-box'); box.innerHTML='';
+  activeHist().forEach(m=>appendMsg(m.role, m.content, m.citations));
+  box.scrollTop = box.scrollHeight;
 }
 function typing(bool){
   let el = $('#chat-typing');
-  if(bool && !el){ el=document.createElement('div'); el.id='chat-typing'; el.className='msg assistant typing'; el.textContent='联网检索中…'; $('#chat-box').appendChild(el); $('#chat-box').scrollTop=$('#chat-box').scrollHeight; }
+  if(bool && !el){ el=document.createElement('div'); el.id='chat-typing'; el.className='msg assistant typing'; el.textContent = chatMode==='kb' ? '查库中…' : '联网检索中…'; $('#chat-box').appendChild(el); $('#chat-box').scrollTop=$('#chat-box').scrollHeight; }
   if(!bool && el) el.remove();
 }
 async function sendChat(){
   const inp = $('#chat-input'); const msg = inp.value.trim(); if(!msg) return;
   inp.value='';
   addChatMsg('user', msg);
-  const history = chatHistory.slice(0, -1);
-  const r = await postFetch('/api/chat', {message:msg, history});
+  const history = activeHist().slice(0, -1).map(m=>({role:m.role, content:m.content}));
+  const url = chatMode==='kb' ? '/api/librarian' : '/api/chat';
+  const r = await postFetch(url, {message:msg, history});
   if(r.error){ addChatMsg('assistant', '❌ '+r.error); return; }
   typing(true);
   pollJob(r.job_id, s=>{
     typing(false);
     if(s.status==='error') addChatMsg('assistant', '❌ '+s.error);
-    else addChatMsg('assistant', (s.result && s.result.answer) || '(空回答)');
+    else {
+      const res = s.result || {};
+      addChatMsg('assistant', res.answer || '(空回答)', res.citations);
+    }
   });
 }
 function saveChat(){
-  if(!chatHistory.length){ toast('暂无对话可保存'); return; }
-  postFetch('/api/chat/save', {history: chatHistory}).then(r=>{
+  const h = activeHist().map(m=>({role:m.role, content:m.content}));
+  if(!h.length){ toast('暂无对话可保存'); return; }
+  postFetch('/api/chat/save', {history: h}).then(r=>{
     if(r.error){ toast(r.error); return; }
     toast('保存中…');
     pollJob(r.job_id, s=>{
@@ -1068,6 +1146,37 @@ function saveChat(){
     });
   });
 }
+document.querySelectorAll('.mode-toggle button').forEach(b=>b.onclick=()=>switchMode(b.dataset.mode));
+
+// ── 侧栏拖拽调宽 ──
+(function(){
+  const rail = $('#chat-rail'), rz = $('#rail-resizer');
+  if(!rail || !rz) return;
+  const saved = localStorage.getItem('railW');
+  if(saved) rail.style.width = saved;
+  rz.addEventListener('pointerdown', e=>{
+    e.preventDefault();
+    rz.setPointerCapture(e.pointerId);
+    rz.classList.add('drag');
+    const startX = e.clientX, startW = rail.getBoundingClientRect().width;
+    const onMove = ev=>{
+      const w = Math.max(280, Math.min(window.innerWidth*0.7, startW + (startX - ev.clientX)));
+      rail.style.width = w + 'px';
+    };
+    const onUp = ()=>{
+      rz.classList.remove('drag');
+      rz.removeEventListener('pointermove', onMove);
+      rz.removeEventListener('pointerup', onUp);
+      rz.removeEventListener('pointercancel', onUp);
+      document.body.style.cursor=''; document.body.style.userSelect='';
+      localStorage.setItem('railW', rail.style.width);
+    };
+    document.body.style.cursor='col-resize'; document.body.style.userSelect='none';
+    rz.addEventListener('pointermove', onMove);
+    rz.addEventListener('pointerup', onUp);
+    rz.addEventListener('pointercancel', onUp);
+  });
+})();
 
 loadMeta();
 </script>
