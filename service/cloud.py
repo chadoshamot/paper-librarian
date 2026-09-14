@@ -1,7 +1,7 @@
 """云端同步：python -m service.cloud [sync]
 
 把 cache/ 的 PDF（git-lfs）与 knowledge-base/ 的 Markdown 增量推送到
-ModelScope 两个数据集仓库（shamot/paper-library-pdfs + shamot/paper-knowledge-base）。
+ModelScope 两个数据集仓库（your-namespace/paper-library-pdfs + your-namespace/paper-knowledge-base）。
 幂等：无变更则跳过；token 从 .env 读 MODELSCOPE_TOKEN。
 """
 import os
@@ -34,8 +34,8 @@ def _sync_repo(repo_dir, namespace, repo, token, message):
     if not (repo_dir / ".git").exists():
         print(f"[cloud] {repo} 尚未初始化 git，跳过")
         return False
-    _git(repo_dir, "config", "user.name", "shamotsu")
-    _git(repo_dir, "config", "user.email", "shamotsu@gmail.com")
+    _git(repo_dir, "config", "user.name", os.environ.get("GIT_USER_NAME", "you"))
+    _git(repo_dir, "config", "user.email", os.environ.get("GIT_USER_EMAIL", "you@example.com"))
     _ensure_remote(repo_dir, namespace, repo, token)
     _git(repo_dir, "add", "-A")
     if not _git(repo_dir, "status", "--porcelain").stdout.strip():

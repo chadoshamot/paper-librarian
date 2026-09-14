@@ -7,13 +7,17 @@
 脚本会依次：检查 Python → 建目录骨架 → 导入/初始化论文库 → 生成配置与 .env
 → 安装依赖 → 冒烟验证。密钥只写进 .env（已 gitignore，不会上传）。
 """
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-DEMO_NS = "shamot"  # 公开示例库所在的 ModelScope 命名空间（只读导入）
+# 公开示例库所在的 ModelScope 命名空间（只读导入）。
+# 留空则跳过示例库导入、直接自建空库；要复用某个公开示例库时用环境变量指定：
+#   MODELSCOPE_DEMO_NS=<namespace> python setup.py
+DEMO_NS = os.environ.get("MODELSCOPE_DEMO_NS", "").strip()
 
 
 def ask(prompt: str, default: str = "") -> str:
@@ -166,6 +170,9 @@ def main() -> None:
     print("  A. 导入公开示例论文库（18 篇，只读浏览/检索，零 token）")
     print("  B. 自建库（填你自己的 ModelScope，可完整上云/推库）")
     mode = "B" if ask_bool("  选 B 自建库吗？[y/N]", "n") else "A"
+    if mode == "A" and not DEMO_NS:
+        print("  [提示] 未配置公开示例库（环境变量 MODELSCOPE_DEMO_NS 为空），自动改为自建库。")
+        mode = "B"
     if mode == "A":
         git_clone(f"https://www.modelscope.cn/datasets/{DEMO_NS}/paper-knowledge-base.git",
                   ROOT / "knowledge-base")

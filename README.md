@@ -55,7 +55,7 @@ python -m service.web      # 网页界面，浏览器打开 http://127.0.0.1:800
 
 ## 数据模式
 
-- **示例库（默认，只读）**：`setup.py` 会 `git clone` 公开的示例论文库（ModelScope `shamot` 命名空间，约 18 篇），克隆即能检索/浏览，零 token。
+- **示例库（可选，只读）**：若设置了环境变量 `MODELSCOPE_DEMO_NS`（指向某个公开示例论文库的 ModelScope 命名空间），`setup.py` 会 `git clone` 它，克隆即能检索/浏览，零 token。
 - **自建库（完整写功能）**：填你自己的 ModelScope `namespace` + token，用 `python -m service.ingest papers/xxx.pdf` 建自己的库，`python -m service.cloud sync` 上云。
 
 ## 常用命令

@@ -104,7 +104,7 @@ def fetch_openalex(query: str, limit: int, recent_days: int) -> list[dict]:
         "per-page": limit,
         "sort": "relevance_score:desc",   # 相关度优先；被引次数仅作评分成分，不参与排序
         "filter": f"from_publication_date:{since}",
-        "mailto": "shamotsu@gmail.com",
+        "mailto": "you@example.com",
     })
     data = _http_json(f"https://api.openalex.org/works?{params}")
     out = []
