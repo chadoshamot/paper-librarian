@@ -494,7 +494,7 @@ def render_md(cands: list[dict], cfg: Config) -> str:
         authors = ", ".join((c.get("authors") or [])[:3]) + (" 等" if len(c.get("authors") or []) > 3 else "")
         lines += [
             f"## {i}. {c['title']}",
-            f"- **年份** {c.get('year') or '?'} · **venue** {c.get('venue') or '未知'} · **被引** {c.get('citations') or 0}",
+            f"- **年份** {c.get('year') or '?'} · **venue** {c.get('venue') or '未知'} · **被引** {c.get('citations') or 0} · **未读**",
             f"- **作者** {authors}",
             f"- **链接** {c.get('url') or ''}",
             f"- **来源** {c.get('source')} · 查询 `{c.get('query', '')}`",
@@ -516,6 +516,7 @@ def main():
     ap.add_argument("--recent-days", type=int, default=None)
     ap.add_argument("--no-llm", action="store_true", help="跳过 LLM 裁判")
     ap.add_argument("--json", action="store_true", help="同时写一份 JSON")
+    ap.add_argument("--email", action="store_true", help="检索后自动推送邮件（需 .env 配 SMTP_*）")
     args = ap.parse_args()
 
     cfg = Config()
@@ -548,9 +549,17 @@ def main():
     print("\n" + "=" * 70)
     for i, c in enumerate(cands, 1):
         print(f"{i:2d}. [{c['score']:.3f}] {c['title']}")
-        print(f"     {c.get('year') or '?'} · {c.get('venue') or '未知'} · 被引{c.get('citations') or 0} · {c.get('url') or ''}")
+        print(f"     {c.get('year') or '?'} · {c.get('venue') or '未知'} · 被引{c.get('citations') or 0} · 未读 · {c.get('url') or ''}")
     print("=" * 70)
     print(f"日报已写入 {md_path}")
+
+    if args.email:
+        from .emailer import send_daily
+        try:
+            res = send_daily(cands, None)
+            print(f"[邮件] 已推送 {res['count']} 篇候选到 {res['to']}")
+        except Exception as e:
+            print(f"[邮件] 推送失败: {e}")
 
 
 if __name__ == "__main__":

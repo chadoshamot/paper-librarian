@@ -52,6 +52,30 @@ def _meta(d):
     return f"{d['category']}/{area}/{d['work']}/{d.get('year') or '?'}"
 
 
+def _read(d):
+    return "已读" if d.get("read") else "未读"
+
+
+def _mark_read_prompt(cfg, docs):
+    """交互式标记已读：输入序号（逗号分隔），显式人工确认才从未读→已读。"""
+    from .read_state import mark, sync_read
+    s = _ask("标记哪些为已读？输入序号（逗号分隔，如 1,3），回车取消", default="")
+    if not s:
+        return
+    idxs = []
+    for part in s.split(","):
+        part = part.strip()
+        if part.isdigit() and 1 <= int(part) <= len(docs):
+            idxs.append(int(part) - 1)
+    if not idxs:
+        print("  无效序号")
+        return
+    for i in idxs:
+        mark(cfg, docs[i]["pid"], True)
+    print(f"  已标记 {len(idxs)} 篇为已读。")
+    sync_read()
+
+
 def _open_targets(doc, cfg):
     targets = resolve_targets(doc, cfg)
     if not targets:
@@ -167,16 +191,19 @@ def _search_flow(cfg):
         print(f"（无结果：{query}）")
         return
     for i, d in enumerate(results, 1):
-        print(f"\n{i}. {d['title_en']}  [{_meta(d)}]")
+        print(f"\n{i}. {d['title_en']}  [{_meta(d)}] · {_read(d)}")
         if d["title_zh"] and d["title_zh"] != d["title_en"]:
             print(f"   {d['title_zh']}")
         core = (d.get("core_zh") or "").strip()
         if core:
             print(f"   {core[:120]}")
     while True:
-        s = _ask("输入序号打开原文 / 回车返回", default="")
+        s = _ask("输入序号打开原文 / r 标记已读 / 回车返回", default="")
         if not s:
             return
+        if s.lower() == "r":
+            _mark_read_prompt(cfg, results)
+            continue
         if s.isdigit() and 1 <= int(s) <= len(results):
             _open_targets(results[int(s) - 1], cfg)
         else:
@@ -192,9 +219,12 @@ def _library_flow(cfg):
             return
         print(f"\n=== 论文库（共 {len(docs)} 篇）===")
         for i, d in enumerate(docs, 1):
-            print(f"  {i:2d}. {d['title_en']}  [{_meta(d)}]")
-        print("  b. 返回主菜单")
+            print(f"  {i:2d}. {d['title_en']}  [{_meta(d)}] · {_read(d)}")
+        print("  r. 标记已读   b. 返回主菜单")
         s = _ask("输入序号查看/操作")
+        if s.lower() == "r":
+            _mark_read_prompt(cfg, docs)
+            continue
         if s.lower() == "b":
             return
         if s.isdigit() and 1 <= int(s) <= len(docs):
@@ -209,7 +239,7 @@ def _doc_detail(doc, cfg):
     if doc["title_zh"]:
         print(f"标题(zh): {doc['title_zh']}")
     print(f"分类: {_meta(doc)}")
-    print(f"venue: {doc.get('venue') or '?'} | arxiv: {doc.get('arxiv_id') or '-'} | pid: {doc['pid']}")
+    print(f"venue: {doc.get('venue') or '?'} | arxiv: {doc.get('arxiv_id') or '-'} | pid: {doc['pid']} | 状态: {_read(doc)}")
     core_zh = (doc.get("core_zh") or "").strip()
     core_en = (doc.get("core_en") or "").strip()
     if core_zh:
@@ -218,7 +248,7 @@ def _doc_detail(doc, cfg):
         print(f"Core:  {core_en[:200]}")
 
     while True:
-        print("\n  [1] 跳转原文  [2] 重分类  [3] 删除  [b] 返回")
+        print("\n  [1] 跳转原文  [2] 重分类  [3] 删除  [4] 标记已读/未读  [b] 返回")
         a = _ask("操作")
         if a == "1":
             _open_targets(doc, cfg)
@@ -228,10 +258,21 @@ def _doc_detail(doc, cfg):
         elif a == "3":
             _delete(doc, cfg)
             return
+        elif a == "4":
+            _toggle_read(doc, cfg)
+            return
         elif a.lower() == "b":
             return
         else:
             print("  无效选择")
+
+
+def _toggle_read(doc, cfg):
+    from .read_state import mark, sync_read
+    new = not doc.get("read")
+    mark(cfg, doc["pid"], new)
+    print(f"  已标记为{'已读' if new else '未读'}。")
+    sync_read()
 
 
 def _reclassify(doc, cfg):
@@ -343,7 +384,7 @@ def _run_daily(cfg):
     print("\n" + "=" * 60)
     for i, c in enumerate(cands, 1):
         print(f"{i:2d}. [{c['score']:.3f}] {c['title']}")
-        print(f"     {c.get('year') or '?'} · {c.get('venue') or '未知'} · 被引{c.get('citations') or 0} · {c.get('url') or ''}")
+        print(f"     {c.get('year') or '?'} · {c.get('venue') or '未知'} · 被引{c.get('citations') or 0} · 未读 · {c.get('url') or ''}")
     print("=" * 60)
     print(f"日报已写入 {out_dir / (today + '.md')}")
     return cands
@@ -488,6 +529,22 @@ def _do_pull():
 
 
 # ── 6. 联网对话 ─────────────────────────────────────────────────────────────
+def _save_chat(cfg, history):
+    if not history:
+        print("  暂无对话可保存。")
+        return
+    try:
+        from .chatlog import save_and_sync
+        r = save_and_sync(history, cfg)
+        print(f"  已保存对话: {r['path']}")
+        if r["pushed"]:
+            print("  已推送到 ModelScope（knowledge-base/chat-logs/）。")
+        else:
+            print("  [提示] 未推送云端（缺 MODELSCOPE_TOKEN 或 knowledge-base 未初始化 git），已存本地。")
+    except Exception as e:
+        print(f"  [错误] 保存失败: {e}")
+
+
 def _chat_flow(cfg):
     from .chat import ChatClient
     try:
@@ -495,7 +552,7 @@ def _chat_flow(cfg):
     except RuntimeError as e:
         print(f"[错误] {e}")
         return
-    print("\n=== 联网对话（Kimi web-search，输入 exit 返回）===")
+    print("\n=== 联网对话（Kimi web-search，输入 exit 返回，save 保存对话）===")
     print("告诉它你的研究方向，它全网检索并返回带真实链接的论文。")
     history = []
     while True:
@@ -503,7 +560,12 @@ def _chat_flow(cfg):
         if not q:
             continue
         if q.lower() in ("exit", "quit", "q", "0"):
+            if history and _ask("保存本次对话到 ModelScope？[y/N]", default="n").lower() in ("y", "yes"):
+                _save_chat(cfg, history)
             return
+        if q.lower() in ("save", "s"):
+            _save_chat(cfg, history)
+            continue
         print("  检索中…")
         try:
             res = cc.chat(history + [{"role": "user", "content": q}])
