@@ -1,10 +1,10 @@
-"""交互式 CLI：`python -m service` 启动（零依赖，复用检索/每日/管线/云/对话核心）。
+"""交互式 CLI：`python -m service` 启动（零依赖，复用检索/每日/管线/云/馆长 agent 核心）。
 
 主菜单：
-  1 检索论文库  2 论文库  3 每日简报  4 上传论文  5 云端同步  6 联网对话  0 退出
+  1 检索论文库  2 论文库  3 每日简报  4 上传论文  5 云端同步  6 馆长 agent  7 查重/去重  0 退出
 
-与网页版共用同一套核心与 config.yml（多接口共参）。所有写操作（重分类/删除/录入/推入）
-完成后可选「同步上云」。
+与网页版共用同一套核心与 config.yml（多接口共参）。所有写操作（重分类/删除/录入/推入/改元数据）
+完成后可选「同步上云」。馆长 agent 是统一入口（查库/深读/联网搜索/下载/上云/删除），危险操作先确认。
 """
 import json
 import os
@@ -92,18 +92,6 @@ def _open_targets(doc, cfg):
             os.startfile(loc)  # Windows：默认程序打开本地 PDF
         else:
             webbrowser.open(loc)
-
-
-def _find_source_pdf(pid, cfg):
-    """由 pid 反查 papers/ 里的原始 PDF（重分类需要）。"""
-    papers = cfg.inbox_dir
-    if pid.startswith("local:"):
-        p = papers / (pid[len("local:"):] + ".pdf")
-        return p if p.exists() else None
-    for f in papers.glob("*.pdf"):
-        if pid in f.name:
-            return f
-    return None
 
 
 def _sync_maybe():
@@ -248,7 +236,7 @@ def _doc_detail(doc, cfg):
         print(f"Core:  {core_en[:200]}")
 
     while True:
-        print("\n  [1] 跳转原文  [2] 重分类  [3] 删除  [4] 标记已读/未读  [b] 返回")
+        print("\n  [1] 跳转原文  [2] 重分类  [3] 删除  [4] 标记已读/未读  [5] 改元数据  [6] 重抓元数据  [b] 返回")
         a = _ask("操作")
         if a == "1":
             _open_targets(doc, cfg)
@@ -260,6 +248,12 @@ def _doc_detail(doc, cfg):
             return
         elif a == "4":
             _toggle_read(doc, cfg)
+            return
+        elif a == "5":
+            _edit_metadata(doc, cfg)
+            return
+        elif a == "6":
+            _fix_metadata(doc, cfg)
             return
         elif a.lower() == "b":
             return
@@ -278,10 +272,6 @@ def _toggle_read(doc, cfg):
 def _reclassify(doc, cfg):
     from .pipeline import IngestPipeline
     pid = doc["pid"]
-    src = _find_source_pdf(pid, cfg)
-    if not src:
-        print(f"[错误] 找不到 {pid} 的原始 PDF（papers/ 目录缺失，无法重分类）")
-        return
     category = _pick_category(cfg)
     area = _pick_area(cfg)
     if not category or not area:
@@ -292,7 +282,7 @@ def _reclassify(doc, cfg):
     if _ask("确认？[y/N]", default="n").lower() not in ("y", "yes"):
         return
     try:
-        result = IngestPipeline(cfg).reclassify(src, category, area, work, year)
+        result = IngestPipeline(cfg).reclassify(pid, category, area, work, year)
     except Exception as e:
         print(f"[错误] {e}")
         return
@@ -302,29 +292,56 @@ def _reclassify(doc, cfg):
 
 
 def _delete(doc, cfg):
-    from .manifest import Manifest
-    from .zotero_client import ZoteroClient
+    from .pipeline import IngestPipeline
     print(f"\n将删除: {doc['title_en']}  [{_meta(doc)}]")
     if _ask("确认删除（含 Zotero 条目 + 本地缓存 + KB 卡片）？[y/N]", default="n").lower() not in ("y", "yes"):
         return
-    manifest = Manifest(cfg.root / "knowledge-base" / "_manifest.json")
-    old = manifest.get(doc["pid"])
-    if not old:
-        print(f"[未找到] {doc['pid']}")
+    try:
+        IngestPipeline(cfg).delete(doc["pid"])
+    except Exception as e:
+        print(f"[错误] {e}")
         return
-    if old.get("zotero_key"):
-        ZoteroClient(cfg.zotero_user_id, cfg.zotero_api_key).delete_item(old["zotero_key"])
-    if old.get("path"):
-        p = Path(old["path"])
-        p.unlink(missing_ok=True)
-        area = (old.get("area") or "").split("::")[-1]
-        work = (old.get("work_slugs") or [""])[0]
-        kb = cfg.root / "knowledge-base" / "fields" / area / work / (p.stem + ".md")
-        kb.unlink(missing_ok=True)
-    manifest.data["entries"].pop(doc["pid"], None)
-    manifest.save()
     print("已删除。")
     _sync_maybe()
+
+
+def _edit_metadata(doc, cfg):
+    from .pipeline import IngestPipeline
+    print("\n修改元数据（回车保留原值）:")
+    title_en = _ask("英文标题", default=doc.get("title_en") or "")
+    title_zh = _ask("中文标题", default=doc.get("title_zh") or "")
+    venue = _ask("venue", default=doc.get("venue") or "")
+    year = _ask("年份", default=str(doc.get("year") or ""))
+    fields = {}
+    if title_en and title_en != doc.get("title_en"):
+        fields["title_en"] = title_en
+    if title_zh and title_zh != doc.get("title_zh"):
+        fields["title_zh"] = title_zh
+    if venue and venue != doc.get("venue"):
+        fields["venue"] = venue
+    if year.isdigit() and int(year) != doc.get("year"):
+        fields["year"] = int(year)
+    if not fields:
+        print("  没有变化。")
+        return
+    try:
+        result = IngestPipeline(cfg).update_metadata(doc["pid"], **fields)
+    except Exception as e:
+        print(f"[错误] {e}")
+        return
+    print(f"  已更新: {', '.join(result.get('updated', []))}")
+
+
+def _fix_metadata(doc, cfg):
+    from .pipeline import IngestPipeline
+    print(f"解析 {doc['pid']} 的真实标题（arXiv 元数据 / PDF 元数据 / 首页文本）…")
+    try:
+        result = IngestPipeline(cfg).fix_title(doc["pid"])
+    except Exception as e:
+        print(f"[错误] {e}")
+        return
+    print(f"  标题(en): {result.get('title_en')}")
+    print(f"  标题(zh): {result.get('title_zh')}")
 
 
 # ── 3. 每日简报 ─────────────────────────────────────────────────────────────
@@ -336,7 +353,7 @@ def _daily_flow(cfg):
         print("  2. 立即运行检索")
         print("  3. 发送到邮箱")
         print("  4. 推入论文库")
-        print("  5. 联网对话（Kimi）")
+        print("  5. 馆长 agent")
         print("  b. 返回主菜单")
         s = _ask("选择")
         if s == "1":
@@ -348,7 +365,7 @@ def _daily_flow(cfg):
         elif s == "4":
             _push_daily(cfg, cands)
         elif s == "5":
-            _chat_flow(cfg)
+            _librarian_flow(cfg)
         elif s.lower() == "b":
             return
         else:
@@ -528,7 +545,41 @@ def _do_pull():
         print(f"[错误] {e}")
 
 
-# ── 6. 联网对话 ─────────────────────────────────────────────────────────────
+# ── 查重 / 去重 ──────────────────────────────────────────────────────────────
+def _dedup_flow(cfg):
+    from .dedup import analyze, execute
+    print("\n=== 查重 / 去重 ===")
+    try:
+        res = analyze(cfg)
+    except Exception as e:
+        print(f"[错误] {e}")
+        return
+    definite = res.get("definite") or []
+    likely = res.get("likely") or []
+    if not definite and not likely:
+        print("没有发现重复论文。")
+        return
+    if definite:
+        print(f"\n内容级重复（{len(definite)} 组，可安全去重）:")
+        for i, g in enumerate(definite, 1):
+            victims = [p for p in g["pids"] if p != g["keep"]]
+            print(f"  {i}. 保留 `{g['keep']}`，删除: {', '.join(victims)}")
+            for p in g["pids"]:
+                print(f"       - {p}: {g['titles'].get(p)}")
+    if likely:
+        print(f"\n疑似重复（仅标题相同，{len(likely)} 组，建议人工确认，不自动删）:")
+        for g in likely:
+            print("  - " + " / ".join(g["pids"]))
+    if definite and _ask("执行去重（删除重复篇并同步 ModelScope）？[y/N]", default="n").lower() in ("y", "yes"):
+        groups = [{"pids": g["pids"], "keep": g["keep"]} for g in definite]
+        try:
+            r = execute(cfg, groups)
+            print(f"  已保留 {len(r['kept'])} 篇，删除 {len(r['removed'])} 篇。")
+        except Exception as e:
+            print(f"[错误] {e}")
+
+
+# ── 6. 馆长 agent / 对话保存 ────────────────────────────────────────────────
 def _save_chat(cfg, history):
     if not history:
         print("  暂无对话可保存。")
@@ -545,15 +596,16 @@ def _save_chat(cfg, history):
         print(f"  [错误] 保存失败: {e}")
 
 
-def _chat_flow(cfg):
-    from .chat import ChatClient
+def _librarian_flow(cfg):
+    from .librarian import Librarian, confirm
     try:
-        cc = ChatClient(cfg.config.get("chat") or {})
-    except RuntimeError as e:
-        print(f"[错误] {e}")
+        lib = Librarian(cfg)
+    except Exception as e:
+        print(f"[错误] 馆长 agent 初始化失败: {e}")
         return
-    print("\n=== 联网对话（Kimi web-search，输入 exit 返回，save 保存对话）===")
-    print("告诉它你的研究方向，它全网检索并返回带真实链接的论文。")
+    print("\n=== 馆长 agent（统一入口）===")
+    print("查库 / 深读全文 / 联网搜索(Kimi) / 下载入库 / 上云 / 删除，凡网页能做的它都能做。")
+    print("输入问题即可；exit 返回，save 保存对话。危险操作会先列计划等你确认。")
     history = []
     while True:
         q = input("\n你: ").strip()
@@ -566,14 +618,28 @@ def _chat_flow(cfg):
         if q.lower() in ("save", "s"):
             _save_chat(cfg, history)
             continue
-        print("  检索中…")
+        print("  馆长处理中…")
         try:
-            res = cc.chat(history + [{"role": "user", "content": q}])
+            res = lib.ask(q, history)
         except Exception as e:
-            print(f"  [错误] {e}")
+            print(f"  [错误] {type(e).__name__}: {e}")
             continue
         ans = res.get("answer") or "（无回答）"
-        print(f"\nKimi:\n{ans}")
+        print(f"\n馆长:\n{ans}")
+        cites = res.get("citations") or []
+        if cites:
+            print("  [引用] " + ", ".join(c["pid"] for c in cites))
+        pending = res.get("pending_action")
+        if pending:
+            print(f"\n  ⚠️ 计划待确认：{pending['summary']}")
+            if _ask("确认执行？[y/N]", default="n").lower() in ("y", "yes"):
+                try:
+                    r = confirm(pending["action_id"], True)
+                except Exception as e:
+                    r = {"error": f"{type(e).__name__}: {e}"}
+            else:
+                r = confirm(pending["action_id"], False)
+            print("  执行结果:", json.dumps(r, ensure_ascii=False, default=str))
         history.append({"role": "user", "content": q})
         history.append({"role": "assistant", "content": ans})
 
@@ -585,7 +651,8 @@ _FUNCS = {
     "3": _daily_flow,
     "4": _upload_flow,
     "5": _cloud_flow,
-    "6": _chat_flow,
+    "6": _librarian_flow,
+    "7": _dedup_flow,
 }
 
 
@@ -604,11 +671,12 @@ def main():
         try:
             choice = _menu(f"AI 论文管家 · 已收录 {n} 篇", [
                 ("1", "检索论文库"),
-                ("2", "论文库（浏览 / 跳转 / 重分类 / 删除）"),
-                ("3", "每日简报（查看 / 运行 / 发邮箱 / 推入论文库 / 联网对话）"),
-                ("4", "上传论文（录入）"),
+                ("2", "论文库（浏览 / 跳转 / 重分类 / 改元数据 / 删除）"),
+                ("3", "每日简报（查看 / 运行 / 发邮箱 / 推入论文库 / 馆长 agent）"),
+                ("4", "上传论文（录入，支持多选）"),
                 ("5", "云端同步（ModelScope）"),
-                ("6", "联网对话（Kimi web-search）"),
+                ("6", "馆长 agent（查库 / 深读 / 联网搜索 / 下载 / 上云 / 删除）"),
+                ("7", "查重 / 去重"),
                 ("0", "退出"),
             ])
         except (EOFError, KeyboardInterrupt):

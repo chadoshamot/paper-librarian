@@ -67,6 +67,13 @@ def _invalidate_docs():
     _DOCS = None
 
 
+def _reload_config():
+    """设置写入后重置配置/文档缓存，使新配置对后续请求生效。"""
+    global _CONFIG, _DOCS
+    _CONFIG = None
+    _DOCS = None
+
+
 def _do_search(config, docs, query, mode, engine, top):
     """与 search.py 同引擎的检索封装，返回 (results, note)。"""
     note = ""
@@ -107,18 +114,6 @@ def _jump_targets(d: dict) -> list[dict]:
         else:
             out.append({"kind": kind, "url": loc})
     return out
-
-
-def _find_source_pdf(pid: str, cfg: Config):
-    """由 pid 反查 papers/ 里的原始 PDF（重分类需要）。"""
-    papers = cfg.inbox_dir
-    if pid.startswith("local:"):
-        p = papers / (pid[len("local:"):] + ".pdf")
-        return p if p.exists() else None
-    for f in papers.glob("*.pdf"):
-        if pid in f.name:
-            return f
-    return None
 
 
 def _library_tree() -> dict:
@@ -201,10 +196,7 @@ def _run_ingest(filename: str) -> dict:
 def _run_reclassify(pid, category, area, work, year) -> dict:
     from .pipeline import IngestPipeline
     cfg = _cfg()
-    src = _find_source_pdf(pid, cfg)
-    if not src:
-        raise ValueError(f"找不到 {pid} 的原始 PDF（papers/ 目录缺失，无法重分类）")
-    result = IngestPipeline(cfg).reclassify(src, category, area, work, year)
+    result = IngestPipeline(cfg).reclassify(pid, category, area, work, year)
     _invalidate_docs()
     return _sync_after(result)
 
@@ -348,6 +340,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._handle_pdf(path[5:])
             if path == "/api/daily/latest":
                 return self._handle_daily_latest()
+            if path == "/api/settings":
+                return self._handle_settings_get()
             if path.startswith("/api/job/"):
                 return self._handle_job(path.rsplit("/", 1)[1])
             return self._json({"error": "not found"}, 404)
@@ -381,9 +375,22 @@ class Handler(BaseHTTPRequestHandler):
                 return self._handle_library_delete(self._read_json_body())
             if parsed.path == "/api/library/sync":
                 return self._json({"job_id": _start_job(_run_library_sync)})
+            if parsed.path == "/api/settings":
+                return self._handle_settings_post(self._read_json_body())
             return self._json({"error": "not found"}, 404)
         except Exception as e:
             return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+
+    # ── 设置 ─────────────────────────────────────────────────
+    def _handle_settings_get(self):
+        from . import settings
+        return self._json(settings.get_settings())
+
+    def _handle_settings_post(self, body):
+        from . import settings
+        result = settings.apply_settings(body.get("config") or {}, body.get("env") or {})
+        _reload_config()
+        return self._json(result)
 
     # ── 读接口 ───────────────────────────────────────────────
     def _handle_meta(self):
@@ -749,6 +756,19 @@ INDEX_HTML = r"""<!doctype html>
   @media (prefers-reduced-motion: reduce){
     * { animation:none !important; transition:none !important; }
   }
+  /* ── 设置控制台 ── */
+  .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:start; }
+  @media (max-width:900px){ .settings-grid { grid-template-columns:1fr; } }
+  .field { display:grid; grid-template-columns:190px 1fr; gap:10px; align-items:center; margin:6px 0; }
+  .field label { font-size:13px; color:var(--ink); word-break:break-all; }
+  .field input, .field textarea {
+    width:100%; padding:7px 10px; border:1px solid var(--line, #ddd); border-radius:6px;
+    background:var(--panel, #fff); color:var(--ink); font-size:13px; font-family:inherit; }
+  .field textarea { min-height:70px; resize:vertical; }
+  .field .secret-badge { font-size:12px; color:var(--accent, #0a7); }
+  .env-row { display:grid; grid-template-columns:190px 1fr 90px; gap:10px; align-items:center; margin:6px 0; }
+  .env-row label { font-size:13px; word-break:break-all; }
+  .env-row .clear-hint { font-size:12px; color:var(--muted, #888); display:flex; align-items:center; gap:4px; }
 </style>
 </head>
 <body>
@@ -758,6 +778,7 @@ INDEX_HTML = r"""<!doctype html>
   <button data-tab="library">论文库</button>
   <button data-tab="daily">每日简报</button>
   <button data-tab="upload">上传论文</button>
+  <button data-tab="settings">设置</button>
 </nav>
 <div class="app">
 <main class="content">
@@ -811,9 +832,32 @@ INDEX_HTML = r"""<!doctype html>
   <section id="tab-upload" class="panel">
     <div class="card">
       <b>上传并入库</b>
-      <p class="muted">PDF 丢到 papers/ 并走 分类 → Zotero → 双语卡 → manifest 全流程（约 15–30 秒），完成后自动同步 ModelScope。</p>
-      <div class="row"><input type="file" id="file" accept="application/pdf"><button class="btn primary" onclick="ingest()">上传并入库</button></div>
+      <p class="muted">可一次多选多个 PDF，逐个排队走 分类 → Zotero → 双语卡 → manifest 全流程（每篇约 15–30 秒），全部完成后自动同步 ModelScope。</p>
+      <div class="row"><input type="file" id="file" accept="application/pdf" multiple><button class="btn primary" id="upload-btn" onclick="ingest()">上传并入库</button></div>
       <div id="job-log"></div>
+    </div>
+  </section>
+
+  <!-- 设置 -->
+  <section id="tab-settings" class="panel">
+    <div class="card">
+      <div class="row" style="align-items:center">
+        <b>设置控制台</b>
+        <span class="muted">修改参数配置与 API Key，保存后立即生效</span>
+        <span style="margin-left:auto"><button class="btn primary" onclick="saveSettings()">保存全部</button></span>
+      </div>
+      <div id="settings-status" class="muted" style="margin-top:8px"></div>
+    </div>
+    <div class="settings-grid">
+      <div class="card">
+        <h4>参数配置 <span class="muted">config.yml</span></h4>
+        <div id="cfg-fields"></div>
+      </div>
+      <div class="card">
+        <h4>API 密钥 <span class="muted">.env</span></h4>
+        <p class="muted">密钥仅存本地 .env（不上云）。输入框留空 = 保持不变；勾选「清除」= 删除该项。</p>
+        <div id="env-fields"></div>
+      </div>
     </div>
   </section>
 </main>
@@ -882,6 +926,7 @@ function switchTab(name){
   document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('on', p.id==='tab-'+name));
   if(name==='library'){ loadMeta(); if(!LIB) loadLibrary(); }
   if(name==='daily') loadDaily();
+  if(name==='settings') loadSettings();
 }
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
 
@@ -1118,16 +1163,51 @@ function sendEmail(){
 
 // ── 上传论文 ──
 async function ingest(){
-  const f = $('#file').files[0];
-  if(!f){ toast('请先选择 PDF 文件'); return; }
-  const dataUrl = await new Promise(res=>{ const rd=new FileReader(); rd.onload=()=>res(rd.result); rd.readAsDataURL(f); });
-  const r = await postFetch('/api/ingest', {filename:f.name, data:dataUrl.split(',')[1]});
-  if(r.error){ toast(r.error); return; }
-  $('#job-log').innerHTML = '<div class="muted">入库中（分类→Zotero→双语卡，约 15–30 秒）…</div>';
-  pollJob(r.job_id, s=>{
-    if(s.status==='error'){ $('#job-log').innerHTML='<pre>'+esc(s.error)+'\n'+esc(s.log||'')+'</pre>'; toast('入库失败'); }
-    else { $('#job-log').innerHTML='<pre>'+esc(s.log||'')+'</pre>'; toast('已入库并同步 ModelScope'); loadMeta(); loadLibrary(); }
+  const inp = $('#file');
+  const files = Array.from(inp.files || []);
+  if(!files.length){ toast('请先选择 PDF 文件'); return; }
+  const log = $('#job-log'), btn = $('#upload-btn');
+  log.innerHTML = '';
+  const rows = files.map(f => {
+    const el = document.createElement('div');
+    el.className = 'muted';
+    el.textContent = f.name + ' — 排队中…';
+    log.appendChild(el);
+    return {f, el};
   });
+  btn.disabled = true;
+  let ok = 0, fail = 0;
+  // 逐个顺序入库：避免并发打 DeepSeek/Zotero，也避免 ModelScope git 同步竞争
+  for(const {f, el} of rows){
+    el.textContent = f.name + ' — 上传中…';
+    let r;
+    try {
+      const dataUrl = await new Promise((res, rej) => {
+        const rd = new FileReader();
+        rd.onload = () => res(rd.result);
+        rd.onerror = () => rej(rd.error);
+        rd.readAsDataURL(f);
+      });
+      r = await postFetch('/api/ingest', {filename:f.name, data:dataUrl.split(',')[1]});
+    } catch(e){
+      el.textContent = f.name + ' — ❌ 读取/上传失败：' + e;
+      fail++; continue;
+    }
+    if(r.error){ el.textContent = f.name + ' — ❌ ' + r.error; fail++; continue; }
+    el.textContent = f.name + ' — 入库中（分类→Zotero→双语卡，约 15–30 秒）…';
+    const s = await new Promise(res => pollJob(r.job_id, res));
+    if(s.status === 'error'){
+      el.textContent = f.name + ' — ❌ ' + s.error;
+      fail++;
+    } else {
+      el.textContent = f.name + ' — ✅ 已入库并同步 ModelScope';
+      ok++;
+    }
+  }
+  btn.disabled = false;
+  inp.value = '';
+  toast(`批量上传完成：成功 ${ok} 篇，失败 ${fail} 篇`);
+  loadMeta(); loadLibrary();
 }
 
 // ── 对话（右侧常驻栏：馆长 agent，DeepSeek 总控 + Kimi 联网检索）──
@@ -1279,11 +1359,62 @@ function saveChat(){
   });
 })();
 
+// ── 设置 ──
+function cfgFieldHTML(f){
+  const id = 'cfg-'+f.path.replace(/\./g,'-');
+  let input;
+  if(f.type==='list'){
+    input = `<textarea id="${id}" data-path="${esc(f.path)}" data-type="list">${esc(f.value)}</textarea>`;
+  } else {
+    const t = f.type==='number' ? 'number' : 'text';
+    input = `<input id="${id}" type="${t}" data-path="${esc(f.path)}" data-type="${f.type}" value="${esc(f.value)}">`;
+  }
+  return `<div class="field"><label for="${id}">${esc(f.label)}</label>${input}</div>`;
+}
+function envFieldHTML(f){
+  const id = 'env-'+f.key;
+  const input = `<input id="${id}" type="${f.secret?'password':'text'}" data-key="${esc(f.key)}" placeholder="${f.set?'••••••（已配置，留空保持不变）':'（未配置）'}">`;
+  return `<div class="env-row"><label for="${id}">${esc(f.label)}</label>${input}<span class="clear-hint"><input type="checkbox" data-clear="${esc(f.key)}"> 清除</span></div>`;
+}
+async function loadSettings(){
+  const s = await (await fetch('/api/settings')).json();
+  $('#cfg-fields').innerHTML = (s.config_fields||[]).map(cfgFieldHTML).join('');
+  $('#env-fields').innerHTML = (s.env_fields||[]).map(envFieldHTML).join('');
+}
+async function saveSettings(){
+  const cfg = {};
+  document.querySelectorAll('#cfg-fields [data-path]').forEach(el=>{
+    const p = el.dataset.path, t = el.dataset.type;
+    if(t==='list'){ cfg[p] = el.value.split('\n').map(x=>x.trim()).filter(Boolean); }
+    else if(t==='number'){ if(el.value.trim()!=='') cfg[p] = Number(el.value); }
+    else { if(el.value!=='') cfg[p] = el.value; }
+  });
+  const env = {};
+  document.querySelectorAll('#env-fields [data-key]').forEach(el=>{
+    if(el.value.trim()) env[el.dataset.key] = el.value.trim();
+  });
+  document.querySelectorAll('#env-fields [data-clear]').forEach(el=>{
+    if(el.checked) env[el.dataset.clear] = '';
+  });
+  const r = await postFetch('/api/settings', {config: cfg, env: env});
+  const st = $('#settings-status');
+  if(r.error){ st.textContent = '保存失败：'+r.error; st.style.color='#c0392b'; return; }
+  st.textContent = '✓ 已保存 '+(r.saved||[]).length+' 项（立即生效）';
+  st.style.color='#1a7f37';
+  toast('设置已保存');
+  loadSettings(); loadMeta();
+}
+
 loadMeta();
 </script>
 </body>
 </html>
 """
+
+
+def create_server(host="127.0.0.1", port=8000) -> ThreadingHTTPServer:
+    """构造（但不启动）HTTP 服务，供 CLI 与桌面壳复用。"""
+    return ThreadingHTTPServer((host, port), Handler)
 
 
 def main():
@@ -1292,7 +1423,7 @@ def main():
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
 
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server = create_server(args.host, args.port)
     print(f"AI 论文管家 Web 已启动： http://{args.host}:{args.port}  （Ctrl+C 退出）")
     try:
         server.serve_forever()

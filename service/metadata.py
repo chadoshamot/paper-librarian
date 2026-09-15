@@ -91,3 +91,36 @@ def _fetch_arxiv_api(arxiv_id: str, retries: int = 2) -> dict | None:
             }
         time.sleep(3 * (attempt + 1))
     return None
+
+
+def is_noncompliant_title(title: str) -> bool:
+    """判断标题是否是占位/不合规名（arXiv 编号、local: 前缀、空、或下划线文件名式）。"""
+    t = str(title or "").strip()
+    if not t:
+        return True
+    if t.lower().startswith("local:"):
+        return True
+    if re.fullmatch(r"[Aa]r[Xx]iv[_\s]?\d{4}\.\d{4,5}(v\d+)?", t):
+        return True
+    if re.fullmatch(r"\d{4}\.\d{4,5}(v\d+)?", t):
+        return True
+    # 无空格且含下划线：像文件名（如 speculative_decoding_2022），不是真实论文名
+    if " " not in t and "_" in t:
+        return True
+    return False
+
+
+def extract_pdf_metadata_title(pdf_path: Path) -> str | None:
+    """从 PDF 的 /Title 元数据取标题（不含常见「未命名」占位）。失败/缺失返回 None。"""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return None
+    try:
+        reader = PdfReader(str(pdf_path))
+        mt = str(getattr(reader.metadata, "title", "") or "").strip()
+        if mt and mt.lower() not in ("untitled", "microsoft word", "microsoft powerpoint", "pycharm"):
+            return mt
+    except Exception:
+        pass
+    return None

@@ -47,7 +47,11 @@
 | `delete_paper(pid)` | 删除一篇论文（需确认） | 用户要求删除 |
 | `run_daily_retrieval(top_k, sources)` | 跑每日检索出日报 | 用户要求跑每日检索 |
 | `edit_paper(pid, title_en?, title_zh?, venue?, year?)` | 改一篇论文的标题 / venue / 年份 | 标题抓错或用户要求改元数据 |
-| `fix_metadata(pid)` | 重新从 arXiv / Semantic Scholar 抓元数据修正标题 | 录入时标题抓错（如显示成 arXiv 编号） |
+| `fix_metadata(pid)` | 重新解析一篇论文的真实标题并修正（arXiv 元数据 / PDF 元数据 / 首页文本，含中文标题翻译） | 录入时标题抓错（如显示成 arXiv 编号） |
+| `fix_all_titles()` | 扫描全库，把所有标题是 arXiv 编号/占位名的论文批量修正 | 库里多篇论文标题都是 arXiv 编号等占位名，一次清干净 |
+| `fix_summary(pid)` | 重读该论文 PDF，用大模型重新生成中文标题与中英文摘要/意义，并在卡片里就地替换 | 某篇论文摘要抓错 / 是占位摘要 / 与全文不符时 |
+| `find_duplicates()` | 扫描全库找出重复论文（按 arXiv 编号 / DOI / PDF 内容哈希 / 归一化标题），分「内容级重复」与「仅标题相同」两类 | 用户怀疑有重复、想清理库时 |
+| `deduplicate_papers()` | 删除内容级重复的论文（每组保留信息最全的一篇）并同步 ModelScope（需确认） | 确认查重结果后执行去重 |
 | `send_daily_email(recipient?)` | 把最近一次每日候选发邮件 | 用户要求发邮箱 |
 | `read_daily_report(date?)` | 读最近 / 指定日期的每日报告 | 用户想看日报 |
 
@@ -58,7 +62,7 @@
 
 ### 危险操作（先列计划，等确认）
 
-- `delete_paper` 与 `push_to_cloud` 是**不可逆 / 外发到公开云**的操作。
+- `delete_paper`、`deduplicate_papers` 与 `push_to_cloud` 是**不可逆 / 外发到公开云**的操作。
 - 调用它们时系统**只会生成计划、不会真正执行**；你要用一句话把计划讲给用户，等待用户点击「确认执行」。
 - 未经用户确认，绝不绕过、绝不用其他工具变相完成删除或上云。
 
