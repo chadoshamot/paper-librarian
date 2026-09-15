@@ -148,6 +148,9 @@ def finish(mode: str) -> None:
     print("=" * 60)
     print("    python -m service            # 交互式 CLI（主菜单）")
     print("    python -m service.web        # 网页界面 http://127.0.0.1:8000")
+    print("    python -m service.desktop    # PaperBook 桌面版（原生窗口，含设置控制台）")
+    print("    双击 paperbook.pyw          # 同上，无终端黑窗（Windows）")
+    print("    右键 install-shortcuts.ps1 -> 使用 PowerShell 运行   # 建桌面/开始菜单快捷方式")
     print('    python -m service.search "GPU 集群调度"   # 命令行检索')
     if mode == "A":
         print("\n  当前为【示例库只读】模式：可检索/浏览示例论文。")

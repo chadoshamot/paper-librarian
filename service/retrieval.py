@@ -53,7 +53,9 @@ def load_documents(config) -> list[dict]:
             "work": (fm.get("work_slugs") or [""])[0],
             "year": fm.get("year"),
             "venue": fm.get("venue", ""),
-            "arxiv_id": fm.get("arxiv_id") or "",
+            "arxiv_id": (str(fm.get("arxiv_id"))
+                         if isinstance(fm.get("arxiv_id"), (int, float))
+                         else (fm.get("arxiv_id") or "")),
             "zotero_key": fm.get("zotero_key", ""),
             "pdf_relative": fm.get("pdf_relative", ""),
             "read": fm.get("id") in rs,

@@ -16,3 +16,7 @@ feedparser>=6.0            # 解析 arXiv API 返回的 Atom feed
 
 # ── 馆长 agent（深读：PDF 全文抽取）──
 pypdf>=4.0                 # 纯 Python，无编译依赖
+
+# ── 桌面壳（PaperBook）────────────────────────────
+pywebview>=5.0             # 原生窗口承载 Web 界面（Windows 走 WebView2）
+pythonnet>=3.0             # pywebview 的 Windows EdgeChromium 后端依赖

@@ -65,6 +65,10 @@ def confirm(action_id: str, approve: bool) -> dict:
         from .cloud import sync
         sync()
         return {"executed": True, "action": "push"}
+    if pending["action"] == "dedup":
+        from .dedup import execute
+        result = execute(Config(), pending["params"]["groups"])
+        return {"executed": True, "action": "dedup", **result}
     return {"error": f"未知动作: {pending['action']}"}
 
 
@@ -236,7 +240,19 @@ TOOLS = [
     }},
     {"type": "function", "function": {
         "name": "fix_metadata",
-        "description": "重新从 arXiv/Semantic Scholar 抓取一篇论文的元数据并修正标题/年份。用于录入时标题抓错（如显示成 arXiv 编号）的情况。",
+        "description": "重新解析一篇论文的真实标题并修正（含中文标题与年份）：优先 arXiv/Semantic Scholar，无 arxiv_id 或失败时回退 PDF 元数据/首页文本。用于录入时标题抓错（如显示成 arXiv 编号）的情况。",
+        "parameters": {"type": "object", "properties": {
+            "pid": {"type": "string", "description": "论文 pid"},
+        }, "required": ["pid"]},
+    }},
+    {"type": "function", "function": {
+        "name": "fix_all_titles",
+        "description": "扫描论文库，把所有标题是 arXiv 编号/占位名（不合规）的论文批量自动修正为真实标题（arXiv 元数据 / PDF 元数据 / 首页文本识别，中文标题自动翻译）。用于批量清理录入时标题抓错的论文。",
+        "parameters": {"type": "object", "properties": {}},
+    }},
+    {"type": "function", "function": {
+        "name": "fix_summary",
+        "description": "重新读一篇论文的 PDF 全文，用大模型重写它的中英双语摘要（core/sig/title_zh），就地更新卡片。用于摘要抓错/套模板/与论文内容不符时修复。",
         "parameters": {"type": "object", "properties": {
             "pid": {"type": "string", "description": "论文 pid"},
         }, "required": ["pid"]},
@@ -254,6 +270,16 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "date": {"type": "string", "description": "YYYY-MM-DD，留空取最近一份"},
         }},
+    }},
+    {"type": "function", "function": {
+        "name": "find_duplicates",
+        "description": "扫描论文库找出重复论文（按 arXiv 编号 / DOI / PDF 内容哈希 / 归一化标题）。返回 definite（内容级重复，可安全合并）与 likely（仅标题相同，需人工判断）两类。",
+        "parameters": {"type": "object", "properties": {}},
+    }},
+    {"type": "function", "function": {
+        "name": "deduplicate_papers",
+        "description": "删除论文库中内容级重复的论文（每组保留信息最全的一篇）并同步 ModelScope。删除不可逆：只会生成计划并等待用户确认，绝不立即执行。",
+        "parameters": {"type": "object", "properties": {}},
     }},
 ]
 
@@ -394,9 +420,11 @@ class Librarian:
             return {"error": f"库里没有 pid={pid}"}
         self._cited[doc["pid"]] = doc.get("title_en") or ""
         out = _serialize(doc, full=True)
+        targets = resolve_targets(doc, self.cfg)
+        out["has_pdf"] = any(kind == "local" for kind, _ in targets)
         out["targets"] = [{"kind": "local", "loc": "本地 PDF（deep_read 可读全文）"}
                           if kind == "local" else {"kind": kind, "loc": loc}
-                          for kind, loc in resolve_targets(doc, self.cfg)]
+                          for kind, loc in targets]
         note = self._note(pid)
         if note:
             out["note"] = note
@@ -468,12 +496,16 @@ class Librarian:
 
     def _analyze_paper(self, doc, text):
         title = doc.get("title_en") or ""
-        prompt = f"""你是论文深度解读助手。基于下面这篇论文的**全文**，写一份结构化深度分析（中文，markdown）。
+        prompt = f"""你是论文深度解读助手。下面是某篇论文的**全文开头**（通常含标题、作者、摘要、正文）。请**先根据文本识别这篇论文的真实标题**，再基于全文写结构化深度分析（中文，markdown）。
 
-论文标题：{title}
-全文（截断）：\n{text}
+（库中记录的标题是「{title}」——它可能是抓取错误或占位名，不可尽信。若与文本中的实际标题不符，一律以文本为准，并在「真实标题」一栏指出不一致。）
+
+全文（截断）：
+{text}
 
 严格按以下结构输出，不要输出正文以外的话：
+
+**真实标题**：从文本中识别出的论文标题（若与库中记录不一致，在这里点明）。
 
 **要解决的问题**：2-3 句。
 
@@ -558,22 +590,9 @@ class Librarian:
             return {"url": s}
         return {"error": f"无法识别的来源：{s}（需 arxiv id/链接、DOI 或直链 PDF）"}
 
-    def _find_source_pdf(self, pid):
-        papers = self.cfg.inbox_dir
-        if pid.startswith("local:"):
-            p = papers / (pid[len("local:"):] + ".pdf")
-            return p if p.exists() else None
-        for f in papers.glob("*.pdf"):
-            if pid in f.name:
-                return f
-        return None
-
     def _reclassify(self, pid, category, area, work, year):
         from .pipeline import IngestPipeline
-        src = self._find_source_pdf(pid)
-        if not src:
-            return {"error": f"找不到 {pid} 的原始 PDF（papers/ 目录缺失，无法重分类）"}
-        return IngestPipeline(self.cfg).reclassify(src, category, area, work, int(year))
+        return IngestPipeline(self.cfg).reclassify(pid, category, area, work, int(year))
 
     def _mark_read(self, pid, read):
         from .read_state import mark, sync_read
@@ -644,22 +663,37 @@ class Librarian:
             return {"error": f"修改失败: {type(e).__name__}: {e}"}
 
     def _fix_metadata(self, pid):
-        from .metadata import fetch_arxiv
+        from .pipeline import IngestPipeline
+        try:
+            return IngestPipeline(self.cfg).fix_title(pid)
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}"}
+
+    def _fix_summary(self, pid):
+        from .pipeline import IngestPipeline
+        try:
+            return IngestPipeline(self.cfg).fix_summary(pid)
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}"}
+
+    def _fix_all_titles(self):
+        from .metadata import is_noncompliant_title
         from .pipeline import IngestPipeline
         pipe = IngestPipeline(self.cfg)
-        entry = pipe.manifest.get(pid)
-        if not entry:
-            return {"error": f"库里没有 pid={pid}"}
-        arxiv_id = entry.get("arxiv_id")
-        if not arxiv_id:
-            return {"error": f"{pid} 没有 arxiv_id，无法自动抓取（请用 edit_paper 手动改标题）"}
-        meta = fetch_arxiv(arxiv_id)
-        if not meta or not meta.get("title"):
-            return {"error": f"未能从 arXiv/Semantic Scholar 抓到 {arxiv_id} 的元数据（可能被限流，稍后再试）"}
-        fields = {"title_en": meta["title"]}
-        if meta.get("year"):
-            fields["year"] = meta["year"]
-        return pipe.update_metadata(pid, **fields)
+        bad = [d for d in load_documents(self.cfg)
+               if is_noncompliant_title(d.get("title_en", ""))]
+        if not bad:
+            return {"fixed": 0, "failed_papers": [],
+                    "message": "没有发现标题不合规（arXiv 编号/占位名）的论文。"}
+        fixed, failed = [], []
+        for d in bad:
+            try:
+                r = pipe.fix_title(d["pid"])
+                fixed.append({"pid": d["pid"], "title_en": r.get("title_en", "")})
+            except Exception as e:
+                failed.append({"pid": d["pid"], "error": f"{type(e).__name__}: {e}"})
+        return {"fixed": len(fixed), "failed": len(failed),
+                "fixed_papers": fixed, "failed_papers": failed}
 
     def _send_daily_email(self, recipient=None):
         from . import daily
@@ -694,6 +728,36 @@ class Librarian:
                 return {"error": "还没有每日报告"}
             p = mds[-1]
         return {"date": p.stem, "report": p.read_text(encoding="utf-8")[:6000]}
+
+    def _find_dups(self):
+        from .dedup import analyze
+        try:
+            return analyze(self.cfg)
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}"}
+
+    def _dedup(self):
+        from .dedup import analyze
+        try:
+            res = analyze(self.cfg)
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}"}
+        definite = res.get("definite") or []
+        if not definite:
+            return {"message": "没有发现内容级重复的论文（无需去重）。",
+                    "likely": res.get("likely") or []}
+        aid = uuid.uuid4().hex[:8]
+        victims = sum(len(g["pids"]) - 1 for g in definite)
+        summary = (f"去重：发现 {len(definite)} 组重复论文（共删除 {victims} 篇重复），"
+                   f"每组保留信息最全的一篇，并同步到 ModelScope。")
+        groups = [{"pids": g["pids"], "keep": g["keep"]} for g in definite]
+        detail = [{"keep": g["keep"],
+                   "remove": [p for p in g["pids"] if p != g["keep"]]}
+                  for g in definite]
+        _PENDING[aid] = {"action": "dedup",
+                         "params": {"groups": groups}, "summary": summary}
+        return {"requires_confirmation": True, "action_id": aid,
+                "action": "dedup", "summary": summary, "detail": detail}
 
     def _dispatch(self, name, args):
         if name == "search_library":
@@ -742,10 +806,18 @@ class Librarian:
                                     year=args.get("year"))
         if name == "fix_metadata":
             return self._fix_metadata(args.get("pid", ""))
+        if name == "fix_summary":
+            return self._fix_summary(args.get("pid", ""))
+        if name == "fix_all_titles":
+            return self._fix_all_titles()
         if name == "send_daily_email":
             return self._send_daily_email(args.get("recipient"))
         if name == "read_daily_report":
             return self._read_daily_report(args.get("date"))
+        if name == "find_duplicates":
+            return self._find_dups()
+        if name == "deduplicate_papers":
+            return self._dedup()
         return {"error": f"未知工具 {name}"}
 
     # ── 主循环 ────────────────────────────────────────────

@@ -3,6 +3,7 @@ import argparse
 from pathlib import Path
 
 from .config_loader import Config
+from .metadata import parse_filename
 from .pipeline import IngestPipeline
 
 
@@ -17,7 +18,9 @@ def main():
 
     pipe = IngestPipeline(Config())
     print(f"\n=== 重分类: {Path(args.pdf).name} ===")
-    result = pipe.reclassify(Path(args.pdf), args.category, args.area, args.work, args.year)
+    fn = parse_filename(Path(args.pdf))
+    pid = fn.get("arxiv_id") or f"local:{Path(args.pdf).stem}"
+    result = pipe.reclassify(pid, args.category, args.area, args.work, args.year)
     for k, v in result.items():
         print(f"  {k}: {v}")
 
