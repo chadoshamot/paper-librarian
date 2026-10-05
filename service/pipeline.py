@@ -23,12 +23,23 @@ def _yaml_str(s) -> str:
 class IngestPipeline:
     def __init__(self, config: Config):
         self.config = config
-        self.llm = LLM(config.model)
-        self.zotero = ZoteroClient(config.zotero_user_id, config.zotero_api_key)
-        self.classifier = Classifier(self.llm, config.taxonomy)
+        self._llm = None
+        user_id, api_key = config.zotero_user_id, config.zotero_api_key
+        self.zotero = (ZoteroClient(user_id, api_key) if user_id and api_key
+                       and not str(user_id).startswith("${") and not str(api_key).startswith("${") else None)
         self.manifest = Manifest(config.root / "knowledge-base" / "_manifest.json")
         self.cache_dir = config.cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def llm(self):
+        if self._llm is None:
+            self._llm = LLM(self.config.model)
+        return self._llm
+
+    @property
+    def classifier(self):
+        return Classifier(self.llm, self.config.taxonomy)
 
     def run(self, pdf_path: Path, override: dict | None = None) -> dict:
         # 1. 元数据
@@ -137,7 +148,7 @@ class IngestPipeline:
         old_kb.unlink(missing_ok=True)
 
         # Zotero 条目与标题不变，只补新分类标签（best-effort，失败不抛）
-        if old.get("zotero_key"):
+        if old.get("zotero_key") and self.zotero:
             try:
                 self.zotero.add_tags(old["zotero_key"], [category, area_zh, work])
             except Exception:
@@ -153,7 +164,7 @@ class IngestPipeline:
         old = self.manifest.get(pid)
         if not old:
             raise ValueError(f"未找到已入库论文: {pid}")
-        if old.get("zotero_key"):
+        if old.get("zotero_key") and self.zotero:
             self.zotero.delete_item(old["zotero_key"])
         if old.get("path"):
             p = Path(old["path"])
@@ -204,7 +215,7 @@ class IngestPipeline:
         if man:
             self.manifest.upsert(pid, **man)
 
-        if "title_en" in fields and entry.get("zotero_key"):
+        if "title_en" in fields and entry.get("zotero_key") and self.zotero:
             self.zotero.update_title(entry["zotero_key"], fields["title_en"])
 
         return {"pid": pid, "updated": updated}
@@ -330,6 +341,8 @@ class IngestPipeline:
         return f"{category}_{area_zh}_{work}_{year or 0}_{tag}.pdf"
 
     def _zotero_add(self, meta, title, cls, area, work, year, dest):
+        if not self.zotero:
+            return None
         item = {
             "itemType": "preprint",  # P0 简化；后续按 venue 细化 conferencePaper/journalArticle
             "title": title,
@@ -338,11 +351,15 @@ class IngestPipeline:
         authors = meta.get("authors")
         if authors:
             item["creators"] = [{"creatorType": "author", "name": a} for a in authors[:10]]
-        zot_key = self.zotero.create_item(item)
-        if zot_key:
-            self.zotero.attach_linked_file(zot_key, dest, dest.name)
-            self.zotero.add_tags(zot_key, [cls["category"], area.split("::")[-1], work])
-        return zot_key
+        try:
+            zot_key = self.zotero.create_item(item)
+            if zot_key:
+                self.zotero.attach_linked_file(zot_key, dest, dest.name)
+                self.zotero.add_tags(zot_key, [cls["category"], area.split("::")[-1], work])
+            return zot_key
+        except Exception as exc:
+            print(f"  [warn] Zotero 不可用，继续本地入库: {type(exc).__name__}")
+            return None
 
     def _summarize(self, title, abstract, pdf_text=""):
         """据论文真实内容（arXiv 摘要 + PDF 首页全文）产出中英双语简介，含真实英文标题。

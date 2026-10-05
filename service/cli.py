@@ -383,21 +383,20 @@ def _show_latest_daily(cfg):
 
 def _run_daily(cfg):
     from . import daily as daily_mod
-    daily_cfg = cfg.config["daily"]
+    from .research_profile import load as load_profile
+    daily_cfg = load_profile(cfg)["options"]
     sources = list(daily_cfg.get("sources", []))
     top_k = daily_cfg.get("top_k", 10)
     use_llm = _ask("使用 LLM 裁判打分？[Y/n]", default="y").lower() in ("y", "yes")
     print(f"\n运行每日检索（源 {sources}，top {top_k}，LLM={use_llm}）…")
     cands = daily_mod.run(cfg, sources, top_k, use_llm=use_llm)
+    daily_mod.save_report(cands, cfg)
     if not cands:
         print("\n今日无新候选论文。")
         return []
     out_dir = cfg.root / "reports" / "daily"
     out_dir.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
-    (out_dir / f"{today}.md").write_text(daily_mod.render_md(cands, cfg), encoding="utf-8")
-    (out_dir / f"{today}.json").write_text(
-        json.dumps(cands, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     print("\n" + "=" * 60)
     for i, c in enumerate(cands, 1):
         print(f"{i:2d}. [{c['score']:.3f}] {c['title']}")
@@ -589,9 +588,9 @@ def _save_chat(cfg, history):
         r = save_and_sync(history, cfg)
         print(f"  已保存对话: {r['path']}")
         if r["pushed"]:
-            print("  已推送到 ModelScope（knowledge-base/chat-logs/）。")
+            print("  已推送到私有 ModelScope 仓库（chat-logs/）。")
         else:
-            print("  [提示] 未推送云端（缺 MODELSCOPE_TOKEN 或 knowledge-base 未初始化 git），已存本地。")
+            print("  [提示] 未推送云端（缺 MODELSCOPE_TOKEN 或 chat-logs 未建仓），已存本地。")
     except Exception as e:
         print(f"  [错误] 保存失败: {e}")
 

@@ -13,7 +13,8 @@ class LLM:
         self.api_key = os.environ.get(model_cfg["api_key_env"])
         if not self.api_key:
             raise RuntimeError(f"环境变量 {model_cfg['api_key_env']} 未设置，请检查 .env")
-        self.client = OpenAI(api_key=self.api_key, base_url=model_cfg["base_url"])
+        self.client = OpenAI(api_key=self.api_key, base_url=model_cfg["base_url"],
+                             timeout=120, max_retries=2)
         self.default = model_cfg.get("default")
         self.tasks = model_cfg.get("tasks", {})
 

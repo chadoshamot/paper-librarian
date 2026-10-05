@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 论文管家</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/assets/logo.png">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header><div class="masthead"><img class="brand-mark" src="/assets/logo.png" width="34" height="34" alt="Paper Librarian"><h1>AI 论文管家</h1><span class="edition">Vol. 1 · 本地版 · 每日出版</span></div><span class="stat" id="stat"></span></header>
+<nav>
+  <button data-tab="search" class="on">检索</button>
+  <button data-tab="library">论文库</button>
+  <button data-tab="daily">每日简报</button>
+  <button data-tab="upload">上传论文</button>
+  <button data-tab="settings">设置</button>
+</nav>
+<div class="app">
+<main class="content">
+  <!-- 检索 -->
+  <section id="tab-search" class="panel on">
+    <div class="row">
+      <input type="text" id="q" placeholder="输入检索词，如「GPU 集群调度」「memory handover」" />
+      <select id="mode"><option value="search">精准检索</option><option value="explore">探索发现</option></select>
+      <select id="engine">
+        <option value="auto">auto（语义+关键词）</option>
+        <option value="embedding">纯语义</option>
+        <option value="keyword">纯关键词</option>
+      </select>
+      <select id="top"><option>5</option><option selected>10</option><option>20</option></select>
+      <button class="btn primary" onclick="doSearch()">搜索</button>
+    </div>
+    <div class="hint">「探索发现」= 跨子方向去重（MMR），帮你一次扫到不同研究方向的论文，而不是只看最相关的几篇。</div>
+    <div id="search-note" class="muted" style="margin-top:8px"></div>
+    <div id="results"></div>
+  </section>
+
+  <!-- 论文库 -->
+  <section id="tab-library" class="panel">
+    <div class="row">
+      <input id="library-query" placeholder="筛选标题 / 方向" oninput="renderTree()" aria-label="筛选论文">
+      <select id="library-read" onchange="renderTree()" aria-label="阅读状态"><option value="">全部论文</option><option value="unread">未读</option><option value="read">已读</option></select>
+      <button class="btn" onclick="quickChat('请检查论文库的整理情况，列出缺失信息和重复论文，再给出整理计划。')">让馆长整理</button>
+      <button class="btn primary" onclick="librarySync()">⇅ 同步 ModelScope</button>
+      <span class="muted" id="sync-status"></span>
+      <span class="muted" style="margin-left:auto">所有改动（重分类/删除/录入）都会自动同步上云</span>
+    </div>
+    <div class="lib-wrap">
+      <aside class="sidebar">
+        <h4>分类</h4><div id="facet-cat"></div>
+        <h4>大领域</h4><div id="facet-field"></div>
+      </aside>
+      <div class="tree card" id="tree"></div>
+    </div>
+  </section>
+
+  <!-- 每日简报 -->
+  <section id="tab-daily" class="panel">
+    <details class="card profile-editor" id="profile-editor">
+      <summary onclick="if(!PROFILE)loadProfile()">我的论文需求 · 编辑每日推荐方向</summary>
+      <p class="muted">保存到本地 research-profile.md，馆长和每日推荐会共同使用。检索关键词建议用英文，每行一个。</p>
+      <div class="profile-grid">
+        <label>检索关键词<textarea id="profile-queries" rows="5"></textarea></label>
+        <label>研究目标与推荐偏好（Markdown）<textarea id="profile-body" rows="8" placeholder="课题、问题、优先方法、实验要求、排除主题…"></textarea></label>
+      </div>
+      <div class="row">
+        <label>推荐篇数 <input id="profile-top" type="number" min="1" max="100"></label>
+        <label>最近天数 <input id="profile-days" type="number" min="1" max="3650"></label>
+        <label>每查询上限 <input id="profile-per" type="number" min="1" max="100"></label>
+        <label>最低相关度 <input id="profile-relevance" type="number" min="0" max="1" step="0.05"></label>
+      </div>
+      <div class="row" id="profile-sources">
+        <label><input type="checkbox" value="arxiv"> arXiv</label>
+        <label><input type="checkbox" value="openalex"> OpenAlex</label>
+        <label><input type="checkbox" value="semantic_scholar"> Semantic Scholar</label>
+      </div>
+      <details id="profile-raw-mode" ontoggle="if(this.open)syncProfileRaw()"><summary>直接编辑 Markdown 文件</summary><textarea id="profile-raw" rows="16" aria-label="论文需求 Markdown"></textarea></details>
+      <div class="row"><button class="btn primary" onclick="saveProfile()">保存需求</button><button class="btn" onclick="loadProfile()">重新加载</button><span id="profile-status" role="status"></span></div>
+    </details>
+    <div class="row">
+      <button class="btn primary" onclick="runDaily()">立即运行</button>
+      <button class="btn" onclick="sendEmail()">✉ 发送到邮箱</button>
+      <input type="email" id="email-to" placeholder="收件邮箱（留空用 .env 的 SMTP_TO）" style="min-width:220px" />
+      <span class="muted" id="daily-status"></span>
+      <span class="muted" id="daily-date" style="margin-left:auto"></span>
+    </div>
+    <div class="daily-left card" id="daily-list"></div>
+  </section>
+
+  <!-- 上传论文 -->
+  <section id="tab-upload" class="panel">
+    <div class="card">
+      <b>上传并入库</b>
+      <p class="muted">可一次多选多个 PDF，逐个排队走 分类 → Zotero → 双语卡 → manifest 全流程（每篇约 15–30 秒），全部完成后自动同步 ModelScope。</p>
+      <div class="row"><input type="file" id="file" accept="application/pdf" multiple><button class="btn primary" id="upload-btn" onclick="ingest()">上传并入库</button></div>
+      <div id="job-log"></div>
+    </div>
+  </section>
+
+  <!-- 设置 -->
+  <section id="tab-settings" class="panel">
+    <p class="hint">每日推荐方向、论文筛选条件和研究目标，请在「每日简报 → 我的论文需求」中编辑。</p>
+    <div class="card">
+      <div class="row" style="align-items:center">
+        <b>设置控制台</b>
+        <span class="muted">修改参数配置与 API Key，保存后立即生效</span>
+        <span style="margin-left:auto"><button class="btn primary" onclick="saveSettings()">保存全部</button></span>
+      </div>
+      <div id="settings-status" class="muted" style="margin-top:8px"></div>
+    </div>
+    <div class="settings-grid">
+      <div class="card">
+        <h4>参数配置 <span class="muted">config.yml</span></h4>
+        <div id="cfg-fields"></div>
+      </div>
+      <div class="card">
+        <h4>API 密钥 <span class="muted">.env</span></h4>
+        <p class="muted">密钥仅存本地 .env（不上云）。输入框留空 = 保持不变；勾选「清除」= 删除该项。</p>
+        <div id="env-fields"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="rail-resizer" id="rail-resizer"></div>
+<aside class="chat-rail" id="chat-rail">
+  <div class="chat-head">
+    <div class="chat-head-row">
+      <div class="chat-title">馆长</div>
+      <div class="chat-head-actions">
+        <button class="btn small" onclick="openHistory()" title="历史对话">🕘 历史</button>
+        <button class="btn small" onclick="newChat()" title="开启新对话">＋ 新对话</button>
+      </div>
+    </div>
+    <div class="chat-hint" id="chat-hint">查库 · 深读 · 全网搜索 · 下载 · 上云 · 删除——一个馆长全搞定</div>
+  </div>
+  <div class="chat-box" id="chat-box"></div>
+  <div class="input-resizer" id="input-resizer" title="拖动调整输入框高度"></div>
+  <div class="chat-input-row">
+    <textarea id="chat-input" rows="2" placeholder="问论文库 / 联网搜索 / 下载 / 上云…（Enter 发送，Shift+Enter 换行）" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
+    <button id="chat-send" class="btn primary" onclick="sendChat()">发送</button>
+  </div>
+</aside>
+</div>
+
+<div class="overlay" id="overlay" onclick="if(event.target===this)closeOverlay()">
+  <div class="modal" id="modal"></div>
+</div>
+
+<script src="/static/app.js" defer></script>
+</body>
+</html>

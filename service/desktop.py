@@ -6,6 +6,7 @@
 """
 import socket
 import threading
+from pathlib import Path
 
 
 def _free_port() -> int:
@@ -39,7 +40,7 @@ def main():
             "PaperBook", url, width=1280, height=840,
             min_size=(960, 640), text_select=False,
         )
-        webview.start()
+        webview.start(icon=str(Path(__file__).resolve().parent.parent / "paperbook.ico"))
         _ = window
     finally:
         server.shutdown()

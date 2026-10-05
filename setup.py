@@ -49,9 +49,9 @@ def check_python() -> None:
 
 
 def make_dirs() -> None:
-    for d in ("cache", "papers", "index", "reports/daily", "models"):
+    for d in ("cache", "papers", "index", "reports/daily", "models", "chat-logs"):
         (ROOT / d).mkdir(parents=True, exist_ok=True)
-    print("  已就绪：cache/ papers/ index/ reports/daily/ models/")
+    print("  已就绪：cache/ papers/ index/ reports/daily/ models/ chat-logs/")
 
 
 def git_clone(url: str, dest: Path) -> bool:
@@ -152,6 +152,7 @@ def finish(mode: str) -> None:
     print("    双击 paperbook.pyw          # 同上，无终端黑窗（Windows）")
     print("    右键 install-shortcuts.ps1 -> 使用 PowerShell 运行   # 建桌面/开始菜单快捷方式")
     print('    python -m service.search "GPU 集群调度"   # 命令行检索')
+    print("    馆长对话会自动保存到私有云端仓库 chat-logs/，右上角「历史」可追溯/继续。")
     if mode == "A":
         print("\n  当前为【示例库只读】模式：可检索/浏览示例论文。")
         print("  若要自建库上云：编辑 knowledge-base/config.yml 的 storage.cloud 填你的")
@@ -215,6 +216,13 @@ def main() -> None:
 
     section(6, 7, "安装依赖")
     install_deps()
+
+    # 聊天历史私有仓库（best-effort：填了 MODELSCOPE_TOKEN 且依赖装好才建）
+    try:
+        from service.cloud import create_chat_repo
+        create_chat_repo()
+    except Exception:
+        pass
 
     section(7, 7, "冒烟验证")
     smoke()

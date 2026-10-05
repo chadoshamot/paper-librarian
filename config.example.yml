@@ -9,6 +9,7 @@ storage:
     namespace: __NAMESPACE__                # setup.py 会替换成你的 ModelScope 用户名
     pdf_repo: __NAMESPACE__/paper-library-pdfs   # PDF 全量（数据集 repo，git-lfs）
     kb_repo: __NAMESPACE__/paper-knowledge-base  # 知识库（Markdown repo）
+    chat_repo: __NAMESPACE__/paper-chat-logs     # 聊天记录（私有 repo，自动保存）
   local:
     cache_dir: ./cache/                     # 本地热缓存，Zotero 链接文件指向这里
     cache_max_gb: 5                         # 磁盘不够 → 调小或 0
@@ -85,6 +86,7 @@ quality:
 
 # ── 每日检索（P3 启用）────────────────────────────
 daily:
+  # 仅作为首次迁移的默认值；运行时需求在根目录 research-profile.md，通过每日简报 UI 编辑。
   schedule: "0 8 * * *"                    # 每天 08:00（由系统计划任务触发 python -m service.daily）
   top_k: 10
   sources: [arxiv, openalex, semantic_scholar]

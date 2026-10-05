@@ -1,11 +1,18 @@
 # ── 密钥（绝不上云，由 setup.py 交互式生成）──
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+.ssh/
 
 # ── 数据 / 缓存（clone 后由 setup.py 生成或导入，不入库）──
 # PDF 热缓存（ModelScope 云仓库的本地副本）
 cache/
 # 双语知识库（含 config.yml / taxonomy.yml 的运行副本）
 knowledge-base/
+# 聊天记录（私有云端仓库 paper-chat-logs 的本地 git 副本）
+chat-logs/
 # 新 PDF 收件箱（inbox）
 papers/
 # 嵌入模型缓存（首次检索自动下载）
@@ -17,12 +24,22 @@ reports/
 # 馆长 agent 的本地记忆与深读笔记（个人专属，不入库不上云）
 agent-memory.md
 agent-notes/
+research-profile.md
+# 本地宣传草稿与论文附件（保留在工作区，不公开提交）
+/1.md
+/1.pdf
 
 # ── Python ──
 __pycache__/
 *.pyc
 .venv/
 venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
 
 # ── 系统 ──
 .DS_Store

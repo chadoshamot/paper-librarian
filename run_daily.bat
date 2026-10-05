@@ -4,4 +4,9 @@ rem 检索当天 top-k 论文，并把候选推送到 .env 里 SMTP_TO 指定的
 rem 注册示例（管理员 PowerShell，路径按实际改）：
 rem   schtasks /Create /TN "PaperLibrarianDaily" /TR "D:\你的路径\paper-librarian\run_daily.bat" /SC DAILY /ST 07:00 /F
 cd /d "%~dp0"
-python -m service.daily --email --json >> reports\daily\run.log 2>&1
+if not exist reports\daily mkdir reports\daily
+if exist "%~dp0.venv\Scripts\python.exe" (
+  "%~dp0.venv\Scripts\python.exe" -m service.daily --email --json >> reports\daily\run.log 2>&1
+) else (
+  py -3 -m service.daily --email --json >> reports\daily\run.log 2>&1
+)

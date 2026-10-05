@@ -1,4 +1,11 @@
-# AI 论文管家（Paper Librarian）
+<p align="center">
+  <img src="assets/logo.png" width="180" alt="Paper Librarian：书页、书签与星光" />
+</p>
+<h1 align="center">Paper Librarian · AI 论文管家</h1>
+<p align="center">让论文有序，让研究连贯。</p>
+<p align="center">
+  <a href="#快速开始">快速开始</a> · <a href="#馆长-agent统一入口">馆长 Agent</a> · <a href="#每日检索与定时">每日推荐</a>
+</p>
 
 本地 AI 论文管家：录入 PDF → 双语知识库 → 语义检索/跳转 → 云端同步（ModelScope）→ 每日检索 → 统一馆长 agent（查库/深读/联网搜索/下载/上云/删除）。一个可复现、密钥自带的个人论文管理 agent。内置 **PaperBook 桌面软件**，双击即开、无需终端。
 
@@ -55,6 +62,7 @@ python -m service.web      # 网页界面，浏览器打开 http://127.0.0.1:800
 - 所有密钥只在 `.env` 里填写，而 `.env` 已被 `.gitignore` 排除，**永远不会被提交或推送**；仓库里只有 [.env.example](.env.example) 模板（空值）。
 - [config.example.yml](config.example.yml) 里的 `__NAMESPACE__` 是占位符，`setup.py` 会替换成你自填的 ModelScope 用户名。
 - 论文库、PDF、检索索引、嵌入模型、日报、馆长记忆与笔记（`knowledge-base/` `cache/` `papers/` `models/` `index/` `reports/` `agent-memory.md` `agent-notes/`）全部 gitignore，由 `setup.py` 在你机器上生成/导入，不入库。
+- 聊天记录存 `chat-logs/`（gitignored），同步到**私有** `paper-chat-logs` 仓库，不与公开知识库/PDF 仓库混在一起，聊天内容不公开。
 - `service/reconcile_truth.py` 里放的是**空校准表**（一次性修正脚本，按需填你自己的 pid），不随仓库携带任何人数据。
 
 ## 密钥获取指引
@@ -107,9 +115,24 @@ Web 界面右侧聊天栏背后是一个**会查库、会读全文、会联网�
 
 用法：浏览器打开 Web 界面，在右侧聊天栏提问；或在 CLI 主菜单选「6 馆长 agent」直接对话（如「深入读一下 Gavel 的核心调度机制」「网上搜一下最近 GPU 调度的最新进展」）。
 
+## 聊天历史（自动保存 + 追溯）
+
+与馆长的**每一次对话都会自动保存**到本地 `chat-logs/`，并同步到你的**私有** ModelScope 仓库（`your-namespace/paper-chat-logs`，可见性=private，与公开的知识库/PDF 仓库隔离，聊天内容不公开）。
+
+- **自动保存**：每轮问答结束后即写入并推送，无需手动操作；缺 token 时只存本地，填好 token 后下次自动补传。
+- **历史面板**：对话右上角「🕘 历史」打开历史列表（标题 + 时间 + 轮数），点击即**继续**该会话——适合跨天延续同一个上下文；「＋ 新对话」开启新会话。
+- **删除**：历史列表里可删除单条会话（本地与云端一并删除）。
+- 首次同步时会自动 `git init` 本地 `chat-logs/` 并尝试用 ModelScope SDK 建私有仓库；若自动建仓失败，手动在 ModelScope 建一个**私有** dataset 仓库 `paper-chat-logs` 即可。
+
 ## 每日检索与定时
 
-`python -m service.daily` 从 arxiv / openalex / semantic_scholar 抓候选，跨源去重、剔除本库已有，按质量评分排序，输出 `reports/daily/YYYY-MM-DD.md`。兴趣点、阈值、权重在 `knowledge-base/config.yml` 的 `daily` / `quality` 段。
+`python -m service.daily` 从 arxiv / openalex / semantic_scholar 抓候选，跨源去重、剔除本库已有，按质量评分排序，输出 `reports/daily/YYYY-MM-DD.md` 和 `.json`。研究目标、兴趣关键词、检索源、时间范围及相关度阈值统一保存到根目录 **`research-profile.md`**；评分权重仍在 `knowledge-base/config.yml` 的 `quality` 段。即使没有候选也更新日报，避免继续展示旧推荐。
+
+在 **每日简报 → 我的论文需求** 展开编辑器，直接修改关键词、研究目标、推荐偏好、篇数和时间范围，点击「保存需求」。也可展开「直接编辑 Markdown 文件」修改原文。首次使用自动迁移原 `daily` 配置，不改变原来的检索方向。Markdown 的 YAML frontmatter 控制检索，正文描述研究目标和筛选偏好，供推荐裁判、深读和馆长对话共同使用。多窗口或 agent 同时编辑时，旧版本保存会被拒绝，重新加载后再合并自己的修改。
+
+文件只保存在本地，已加入 `.gitignore`，不进入公开知识库或 PDF 云仓库。每次推荐保存对应需求快照到 `reports/daily/profiles/YYYY-MM-DD.md`。可以参考 `research-profile.example.md` 的格式。定时执行仍由下方的系统任务触发；UI 保存需求不会创建新的系统计划任务。
+
+论文库支持标题/方向与已读状态筛选；「让馆长整理」会让 agent 检查缺失信息和重复论文并拟定整理计划。论文详情中的「与馆长讨论这篇论文」会自动带上真实 pid。对话显示当前工具执行进度，结束后可展开执行记录，历史恢复也保留记录。工具错误回传模型处理，轮数耗尽时追加总结请求，避免空回答。PDF 深读跨页面抽取文本并记录页码与截断情况；扫描版或无法抽取文本的 PDF 仍需要 OCR，不能声称已读到其全文。
 
 **Windows（任务计划程序）**：
 
@@ -134,9 +157,14 @@ schtasks /Create /TN "PaperLibrarianDaily" /TR "D:\你的路径\paper-librarian\
 
 ```
 service/            # 服务代码（Python 模块；含 desktop.py 桌面壳、settings.py 设置读写）
+service/static/     # 独立的 index.html / app.css / app.js（无构建步骤）
+service/jobs.py     # 有界后台任务队列、写任务串行执行、隔离的进度事件
+service/research_profile.py # 需求迁移、校验、版本冲突检测
+service/storage.py  # 原子文件写入
 paperbook.pyw       # PaperBook 桌面启动器（双击打开，无终端黑窗）
 PaperBook.bat       # PaperBook 桌面启动（bat 版，等价于双击 pyw）
 paperbook.ico       # PaperBook 图标（快捷方式用）
+assets/logo.png     # 项目标志，README / Web / 桌面图标共用设计
 install-shortcuts.ps1  # 一键创建桌面/开始菜单快捷方式（Windows，右键运行）
 AGENT.md            # 馆长 agent 的操作手册（身份/任务/工具/记忆/规范）
 setup.py            # 一键安装（交互式生成 .env / 配置 / 数据）
@@ -147,11 +175,26 @@ requirements.txt    # 依赖清单
 papers/             # 新 PDF 收件箱（inbox，gitignored）
 cache/              # PDF 热缓存（ModelScope 云仓库本地副本，gitignored）
 knowledge-base/     # 双语知识库（gitignored，由 setup.py 生成/导入）
+chat-logs/          # 聊天记录（私有云端仓库 paper-chat-logs 的本地副本，gitignored）
 index/              # 检索向量索引（自动生成，gitignored）
 models/             # 嵌入模型缓存（自动下载，gitignored）
 reports/daily/      # 每日检索日报（gitignored）
 agent-memory.md     # 馆长全局记忆（本地，gitignored，不上云）
 agent-notes/        # 馆长单篇深读笔记（本地，gitignored，不上云）
+research-profile.md # 用户研究目标与每日推荐配置（本地，自动生成，gitignored）
+tests/              # 离线流程与 HTTP 接口回归测试
 ```
+
+Web / 桌面共用 `service.web` 的本地 HTTP 服务，前端通过 JSON API 发起任务并轮询进度；CLI 直接调用同一组领域模块。`librarian` 负责工具循环，`pipeline` 负责入库和维护，`retrieval` 从 Markdown 卡片读取论文并使用向量索引缓存，`daily` 共用需求文件进行推荐。卡片保存论文内容，manifest 保存稳定 pid 到 PDF/Zotero 的映射，已读状态单独存储，深读笔记与研究需求保存在本地。Web 写任务在一个队列内串行执行，避免同一进程中的 manifest 和云端 git 修改互相覆盖；多个独立 CLI 进程同时修改同一库尚无跨进程锁。
+
+离线回归（不调用真实模型、云端或邮件，不修改个人论文库）：
+
+```powershell
+py -3.14 -m unittest discover -s tests -v
+node --check service/static/app.js
+py -3.14 tests/ui_smoke.py   # 可选：使用已安装的 Chrome，临时库及模拟 agent，不触碰个人库
+```
+
+运行需要 Python 3.10+。Windows 启动脚本优先使用项目 `.venv`，其次使用 Python launcher 的 Python 3，避免 PATH 中旧版 Python 导致启动失败。模型、联网检索、向量模型下载、ModelScope 和 SMTP 的真实连接需使用自己的配置验证。
 
 

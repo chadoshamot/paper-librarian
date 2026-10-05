@@ -35,3 +35,28 @@ def extract_text(path, max_chars: int = 16000) -> str:
         return "\n\n".join(parts)[:max_chars]
     except Exception:
         return ""
+
+
+def extract_document(path, max_chars=60000, max_pages=30):
+    """Sample across the document with page references and explicit coverage."""
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(str(path))
+        total = len(reader.pages)
+        if not total:
+            return {"text": "", "total_pages": 0, "pages_read": [], "truncated": False}
+        indices = list(range(total)) if total <= max_pages else sorted(set(
+            [0, 1, total - 2, total - 1] + [round(i * (total - 1) / (max_pages - 5)) for i in range(max_pages - 4)]))
+        quota = max_chars // len(indices)
+        parts, pages = [], []
+        truncated = len(indices) < total
+        for index in indices:
+            text = reader.pages[index].extract_text() or ""
+            if text.strip():
+                pages.append(index + 1)
+                truncated |= len(text) > quota
+                parts.append(f"[PDF 第 {index + 1} 页]\n{text[:quota]}")
+        return {"text": "\n\n".join(parts), "total_pages": total,
+                "pages_read": pages, "truncated": truncated or len(pages) < total}
+    except Exception:
+        return {"text": "", "total_pages": 0, "pages_read": [], "truncated": True}

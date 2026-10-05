@@ -11,6 +11,7 @@ import yaml
 from dotenv import dotenv_values, load_dotenv, set_key
 
 from .config_loader import ROOT
+from .storage import atomic_write
 
 CONFIG_PATH = ROOT / "knowledge-base" / "config.yml"
 ENV_PATH = ROOT / ".env"
@@ -30,6 +31,7 @@ CONFIG_FIELDS = [
     ("storage.cloud.namespace", "ModelScope 命名空间", "text"),
     ("storage.cloud.pdf_repo", "PDF 仓库", "text"),
     ("storage.cloud.kb_repo", "知识库仓库", "text"),
+    ("storage.cloud.chat_repo", "聊天记录仓库", "text"),
     ("retrieval.top_k", "检索返回条数", "number"),
     ("retrieval.min_sim", "最低相似度", "number"),
     ("retrieval.hybrid.dense", "语义权重 dense", "number"),
@@ -41,12 +43,6 @@ CONFIG_FIELDS = [
     ("quality.weights.recency", "评分权重·新近", "number"),
     ("quality.weights.novelty", "评分权重·新颖", "number"),
     ("quality.weights.llm_judge", "评分权重·LLM 裁判", "number"),
-    ("daily.top_k", "每日检索条数", "number"),
-    ("daily.recent_days", "新鲜度窗口(天)", "number"),
-    ("daily.per_query", "每查询×每源上限", "number"),
-    ("daily.min_relevance", "最低相关度", "number"),
-    ("daily.sources", "检索源(每行一个)", "list"),
-    ("daily.queries", "兴趣点查询(每行一个)", "list"),
     ("open_original.order", "跳转顺序(每行一个)", "list"),
 ]
 
@@ -132,7 +128,7 @@ def _coerce(ftype: str, value):
             f = float(value)
             return int(f) if f == int(f) else f
         except (TypeError, ValueError):
-            return value
+            raise ValueError("数字设置必须填写有效数值")
     if ftype == "list":
         if isinstance(value, str):
             return [x.strip() for x in value.splitlines() if x.strip()]
@@ -145,6 +141,10 @@ def _coerce(ftype: str, value):
 def apply_settings(config_updates: dict, env_updates: dict) -> dict:
     """把设置写回 config.yml 与 .env，并刷新 os.environ。返回结果摘要。"""
     saved = []
+    allowed_config = {path for path, _, _ in CONFIG_FIELDS}
+    allowed_env = {key for key, _, _ in ENV_FIELDS}
+    if set(config_updates) - allowed_config or set(env_updates) - allowed_env:
+        raise ValueError("包含不支持的设置；每日推荐需求请在每日简报中编辑")
 
     # 1) config.yml：合并到原始未解析内容，保留 ${VAR} 占位符
     if config_updates:
@@ -158,10 +158,10 @@ def apply_settings(config_updates: dict, env_updates: dict) -> dict:
             _set_path(raw, path, value)
             saved.append(path)
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.write_text(
+        atomic_write(CONFIG_PATH,
             yaml.safe_dump(raw, allow_unicode=True, sort_keys=False,
                            default_flow_style=False),
-            encoding="utf-8")
+            )
 
     # 2) .env：set_key 只改目标行、保留其余注释/行
     if env_updates:
