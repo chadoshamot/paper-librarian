@@ -1,4 +1,8 @@
 <p align="center">
+  <strong>中文</strong> · <a href="README_EN.md">English</a>
+</p>
+
+<p align="center">
   <img src="assets/logo.png" width="180" alt="Paper Librarian：书页、书签与星光" />
 </p>
 <h1 align="center">Paper Librarian · AI 论文管家</h1>
@@ -40,7 +44,7 @@
 ### 2. 克隆并安装
 
 ```bash
-git clone https://github.com/<你的用户名>/paper-librarian.git
+git clone https://github.com/chadoshamot/paper-librarian.git
 cd paper-librarian
 python setup.py
 ```
@@ -165,6 +169,8 @@ paperbook.pyw       # PaperBook 桌面启动器（双击打开，无终端黑窗
 PaperBook.bat       # PaperBook 桌面启动（bat 版，等价于双击 pyw）
 paperbook.ico       # PaperBook 图标（快捷方式用）
 assets/logo.png     # 项目标志，README / Web / 桌面图标共用设计
+README.md           # 中文说明（顶部可切换语言）
+README_EN.md        # 英文说明（顶部可切换语言）
 install-shortcuts.ps1  # 一键创建桌面/开始菜单快捷方式（Windows，右键运行）
 AGENT.md            # 馆长 agent 的操作手册（身份/任务/工具/记忆/规范）
 setup.py            # 一键安装（交互式生成 .env / 配置 / 数据）
