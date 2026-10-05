@@ -213,3 +213,11 @@ python tests/ui_smoke.py  # Optional: installed Chrome, temporary library, mocke
 ```
 
 Use Python 3.10+. On Windows, launch scripts prefer the project's `.venv`, then the Python launcher, to avoid an older interpreter earlier on PATH. Verify live model, Web-search, embedding-download, ModelScope, and SMTP connections with your own configuration.
+
+### Privacy and cloud sync
+
+Every chat upload checks the ModelScope repository's visibility. An existing public repository, unknown visibility, network failure, or failed repository creation stops synchronization and keeps the session locally. ModelScope SDK 1.40+ is required; first use creates a private chat repository. PDF and knowledge-base visibility depends on your configured repositories; review their permissions and contents before pushing.
+
+Cloud Git authentication uses a temporary child-process environment. Remote URLs contain no token, and synchronization removes credentials from legacy fetch/push URLs. Error output redacts tokens. Credentials, papers, chats, research requirements, and backups are excluded from this GitHub source repository.
+
+Use your GitHub `USER_ID+USERNAME@users.noreply.github.com` address when committing code. Rewriting history cannot remove other people's clones, forks, or GitHub's cached old commits. Re-clone after a history cleanup to avoid reintroducing the old history.

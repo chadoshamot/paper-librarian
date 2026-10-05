@@ -4,7 +4,7 @@ openai>=1.40.0             # DeepSeek/Qwen/GLM 等 OpenAI 兼容 LLM 接口
 python-dotenv>=1.0.0       # 读取 .env
 PyYAML>=6.0                # 解析 config.yml / taxonomy.yml
 requests>=2.31             # HTTP
-modelscope>=1.14.0         # ModelScope CLI / SDK（push 用）
+modelscope>=1.40.0         # SDK 仓库可见性检查（私有聊天同步）
 
 # ── 检索（P1，fastembed + jina-v2-base-zh，768 维，双语）──
 fastembed>=0.8.0           # 语义向量（jinaai/jina-embeddings-v2-base-zh）

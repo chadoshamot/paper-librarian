@@ -203,4 +203,12 @@ py -3.14 tests/ui_smoke.py   # 可选：使用已安装的 Chrome，临时库及
 
 运行需要 Python 3.10+。Windows 启动脚本优先使用项目 `.venv`，其次使用 Python launcher 的 Python 3，避免 PATH 中旧版 Python 导致启动失败。模型、联网检索、向量模型下载、ModelScope 和 SMTP 的真实连接需使用自己的配置验证。
 
+### 隐私与云同步
+
+聊天每次上传前都会查询 ModelScope 仓库可见性。已有公开仓库、无法确认私有状态、网络故障或建仓失败都会停止同步，记录保留在本地。需要 ModelScope SDK 1.40+；首次使用会创建私有聊天仓库。PDF 与知识库的云端可见性由你配置的仓库决定，推送前请检查其权限及内容。
+
+Git 云端认证只通过子进程的临时环境传递，远程 URL 不包含 token；同步时会清除旧的 fetch/push URL 中的凭据。错误输出会隐藏 token。`.env`、论文、聊天、研究需求与备份均不提交到此 GitHub 代码仓库。
+
+提交代码请使用 GitHub 的 `用户ID+用户名@users.noreply.github.com` 隐私邮箱。历史清理不会删除他人的克隆、fork 或 GitHub 已缓存的旧提交；旧克隆请重新克隆，避免把旧历史推送回来。
+
 
